@@ -1,0 +1,26 @@
+# Working hours (integers 0-23)
+WORK_START_HOUR=08
+WORK_END_HOUR=22
+
+# Fit rows to window? true/false
+FIT_TO_WINDOW=true
+
+# Header text + style
+HEADER_TEXT=What's on today
+HEADER_FONT_SIZE=20
+HEADER_FONT_FAMILY=Arial, sans-serif
+HEADER_COLOR=#1a1a1a
+
+# Event label preferences
+EVENT_SHOW_TIMES=false
+EVENT_FONT_SIZE=18
+EVENT_FONT_FAMILY=Arial, sans-serif
+EVENT_FONT_COLOR=#000000
+
+# Calendar colours (optional, comma-separated hex). Example:
+# CALENDAR_COLORS=#2ecc71,#3498db,#9b59b6
+CALENDAR_COLORS=#2ecc71,#3498db,#f39c12
+
+# Now-line style
+NOW_LINE_COLOR=#e74c3c
+NOW_LINE_THICKNESS=3
