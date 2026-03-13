@@ -6,7 +6,10 @@ app.py
 Flask app that reads calendars from calendars.txt and preferences from preferences.txt,
 fetches .ics feeds for today's date, and serves a JSON snapshot at /api/events.
 
-A background thread refreshes the cache every REFRESH_INTERVAL_SECONDS seconds.
+This version supports:
+ - calendars.txt lines of the form: Label|URL|icon_or_filename (icon optional)
+ - preferences including LOGO_PATH, PAST_OVERLAY_COLOR, PAST_OVERLAY_OPACITY
+ - background refresher thread that updates every REFRESH_INTERVAL_SECONDS
 """
 
 from flask import Flask, jsonify, render_template
@@ -41,8 +44,20 @@ DEFAULT_EVENT_FONT_COLOR = "#000000"
 DEFAULT_NOW_COLOR = "#e74c3c"
 DEFAULT_NOW_THICKNESS = 2
 
+DEFAULT_PAST_OVERLAY_COLOR = "#000000"
+DEFAULT_PAST_OVERLAY_OPACITY = 0.12
+
 # === App & cache globals ===
-app = Flask(__name__, template_folder="templates")
+# Ensure template_folder works when frozen by PyInstaller
+import sys
+if getattr(sys, 'frozen', False):
+    base_dir = sys._MEIPASS
+else:
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+
+template_dir = os.path.join(base_dir, "templates")
+static_dir = os.path.join(base_dir, "static")
+app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
 
 cache_lock = threading.Lock()
 cached_snapshot = None  # will hold the JSON-like object to return from /api/events
@@ -51,20 +66,29 @@ cached_snapshot = None  # will hold the JSON-like object to return from /api/eve
 
 def parse_input_line(line):
     """
-    Parse a line of calendars.txt. Accepts "Label|URL" or "URL" (no label).
-    Returns (label_or_none, url).
+    Parse a line of calendars.txt. Accepts:
+      Label|URL|icon
+      Label|URL
+      URL
+    Returns (label_or_none, url, icon_or_none).
     """
-    parts = re.split(r'\||\t', line, maxsplit=1)
+    # split on first two separators
+    parts = [p.strip() for p in re.split(r'\|', line, maxsplit=2)]
+    if len(parts) == 3:
+        label = parts[0] or None
+        url = parts[1]
+        icon = parts[2] or None
+        return label, url, icon
     if len(parts) == 2:
-        label = parts[0].strip()
-        url = parts[1].strip()
-        if label:
-            return label, url
-    return None, line.strip()
+        label = parts[0] or None
+        url = parts[1]
+        return label, url, None
+    # single part -> URL (no label)
+    return None, parts[0], None
 
 def read_calendars_file():
     """
-    Returns list of (label_or_none, url) entries.
+    Returns list of (label_or_none, url, icon_or_none) entries.
     Ignores blank lines and lines starting with '#'.
     """
     if not os.path.exists(CALENDAR_FILE):
@@ -75,7 +99,12 @@ def read_calendars_file():
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            out.append(parse_input_line(line))
+            try:
+                parsed = parse_input_line(line)
+                out.append(parsed)
+            except Exception:
+                # fallback to old behaviour
+                out.append((None, line, None))
     return out
 
 def read_preferences_file():
@@ -140,6 +169,17 @@ def get_now_prefs(prefs):
         thickness = DEFAULT_NOW_THICKNESS
     return {"color": color, "thickness": thickness}
 
+def get_past_overlay_prefs(prefs):
+    color = prefs.get("PAST_OVERLAY_COLOR", DEFAULT_PAST_OVERLAY_COLOR)
+    try:
+        opacity = float(prefs.get("PAST_OVERLAY_OPACITY", DEFAULT_PAST_OVERLAY_OPACITY))
+    except Exception:
+        opacity = DEFAULT_PAST_OVERLAY_OPACITY
+    # clamp
+    if opacity < 0: opacity = 0.0
+    if opacity > 1: opacity = 1.0
+    return {"color": color, "opacity": opacity}
+
 def get_calendar_colors(prefs):
     raw = prefs.get("CALENDAR_COLORS", "")
     if not raw:
@@ -185,7 +225,6 @@ def read_ics_events_for_date(ics_url, target_date):
             if start.date() == target_date:
                 events.append({"title": summary, "start": start.strftime("%H:%M"), "end": end.strftime("%H:%M")})
         except Exception:
-            # defensive: if start has no .date(), skip
             continue
     # sort by start
     events.sort(key=lambda e: e.get("start") or "99:99")
@@ -196,7 +235,6 @@ def read_ics_events_for_date(ics_url, target_date):
 def build_snapshot_for_today():
     """
     Build the JSON-like snapshot for today's date based on calendars.txt and preferences.
-    This should be safe to call concurrently (but caller should hold cache_lock if writing cached_snapshot).
     """
     today = datetime.now().date()
     prefs = read_preferences_file()
@@ -205,7 +243,9 @@ def build_snapshot_for_today():
     header = get_header_prefs(prefs)
     event_prefs = get_event_prefs(prefs)
     now_prefs = get_now_prefs(prefs)
+    past_overlay = get_past_overlay_prefs(prefs)
     calendar_colors = get_calendar_colors(prefs)
+    logo_path = prefs.get("LOGO_PATH", "")  # client will interpret relative path (e.g. /static/logo.png) or URL
 
     snapshot = {
         "work_start_hour": work_start,
@@ -214,32 +254,35 @@ def build_snapshot_for_today():
         "header": header,
         "event_prefs": event_prefs,
         "now_prefs": now_prefs,
+        "past_overlay": past_overlay,
+        "logo_path": logo_path,
         "calendar_colors": calendar_colors,
         "date": today.strftime("%Y-%m-%d"),
         "calendars": []
     }
 
     calendars = read_calendars_file()
-    for label, url in calendars:
+    for label, url, icon in calendars:
         try:
             events = read_ics_events_for_date(url, today)
         except Exception as e:
-            # Capture the error as an event so UI can show something useful instead of failing
             err_text = f"ERROR: {type(e).__name__} {str(e)}"
             events = [{"title": err_text, "start": "", "end": ""}]
-            # You may want to log the full traceback for server-side debugging
             print(f"[app.py] Error fetching {url}: {e}")
             traceback.print_exc()
-        snapshot["calendars"].append({"label": label or url, "events": events})
+        # For the client, expose label/url/icon and events.
+        snapshot["calendars"].append({
+            "label": label or url,
+            "url": url,
+            "icon": icon or "",
+            "events": events
+        })
 
     return snapshot
 
 # === Cache refresher ===
 
 def refresh_all_calendars():
-    """
-    Rebuilds cached_snapshot by fetching all calendars for today.
-    """
     global cached_snapshot
     try:
         print("[app.py] Refreshing calendars...")
@@ -252,11 +295,6 @@ def refresh_all_calendars():
         traceback.print_exc()
 
 def refresh_loop():
-    """
-    Background loop that refreshes the cache periodically.
-    Runs forever (daemon thread).
-    """
-    # Do an immediate refresh on start
     try:
         refresh_all_calendars()
     except Exception:
@@ -269,7 +307,6 @@ def refresh_loop():
             print("[app.py] Exception in scheduled refresh:")
             traceback.print_exc()
 
-# Start background refresher at import time
 def start_background_refresher():
     t = threading.Thread(target=refresh_loop, name="calendar-refresher", daemon=True)
     t.start()
@@ -284,14 +321,10 @@ def index():
 
 @app.route("/api/events")
 def api_events():
-    """
-    Return the cached snapshot if available. If not, build it on-demand.
-    """
     global cached_snapshot
     with cache_lock:
         snap = cached_snapshot
     if snap is None:
-        # No cache yet (startup race) — build it now (non-blocking for other requests)
         try:
             print("[app.py] Cache empty on request — building snapshot on-demand.")
             snap = build_snapshot_for_today()
@@ -300,7 +333,6 @@ def api_events():
         except Exception as ex:
             print("[app.py] Failed to build snapshot on-demand:", ex)
             traceback.print_exc()
-            # Return a minimal informative JSON
             return jsonify({
                 "error": "Failed to build calendar snapshot",
                 "date": datetime.now().strftime("%Y-%m-%d"),
@@ -308,9 +340,6 @@ def api_events():
             }), 500
     return jsonify(snap)
 
-# === CLI entrypoint ===
-
 if __name__ == "__main__":
-    # start background refresher then run Flask dev server
     start_background_refresher()
     app.run(debug=True, host="0.0.0.0", port=5000)
