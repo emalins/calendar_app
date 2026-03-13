@@ -10,12 +10,31 @@
   header { padding:10px; background:#f4f4f4; display:flex; align-items:center; gap:12px; z-index:10; }
   #headerText { font-weight:700; }
   /* Make container positioned so overlay can be absolutely placed inside it */
-  #calendarContainer { flex:1; display:flex; flex-direction:column; overflow:auto; padding-bottom:8px; position:relative; }
-  .row { display:flex; flex:1 0 auto; min-height:50px; border-bottom:1px solid #e8e8e8; align-items:stretch; }
-  .label { width:160px; padding-left:10px; display:flex; align-items:center; font-weight:600; border-right:1px solid #eee; background: #fbfbfb; z-index:2; }
-  .timeline { flex:1; position:relative; background:#fff; overflow:visible; }
-  .hour-grid-line { position:absolute; top:0; bottom:0; width:1px; background:#eee; z-index:0; }
-  .hour-label { position:absolute; top:2px; font-size:11px; color:#666; transform:translateX(-50%); z-index:40; }
+  #calendarContainer {
+    flex:1; display:flex; flex-direction:column; overflow:auto; padding-bottom:8px; position:relative;
+    /* logo will be set inline via JS using snapshot.logo_path */
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: contain;
+  }
+  /* semi-opaque overlay under content so logo doesn't reduce readability */
+  #calendarContainer::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: transparent; /* can be adjusted by JS if needed */
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .row { display:flex; flex:1 0 auto; min-height:68px; border-bottom:1px solid #e8e8e8; align-items:stretch; position:relative; z-index:2; }
+  .label { width:160px; padding-left:10px; display:flex; align-items:center; font-weight:600; border-right:1px solid #eee; background: rgba(251,251,251,0.9); z-index:3; }
+  .timeline { flex:1; position:relative; background:transparent; overflow:visible; z-index:2; }
+  .iconcell { width:84px; min-width:84px; padding:6px; border-left:1px solid #eee; display:flex; align-items:center; justify-content:center; background: rgba(251,251,251,0.9); z-index:3; }
+  .iconcell img { max-width:64px; max-height:56px; object-fit:contain; display:block; }
+
+  .hour-grid-line { position:absolute; top:0; bottom:0; width:1px; background:#eee; z-index:2; }
+  .hour-label { position:absolute; top:6px; font-size:11px; color:#666; transform:translateX(-50%); z-index:40; }
 
   .event {
     position: absolute;
@@ -23,7 +42,7 @@
     top: 50%;
     transform: translateY(-50%);
     border-radius: 6px;
-    padding: 4px 6px;
+    padding: 6px 8px;
     overflow: hidden;
     box-shadow: 0 1px 1px rgba(0,0,0,0.06);
     display: flex;
@@ -32,12 +51,21 @@
     text-align: center;
     white-space: normal;
     word-break: break-word;
-
-    /* IMPORTANT: include padding in width so percent widths align with hour lines */
-    box-sizing: border-box;
+    box-sizing: border-box; /* ensure padding doesn't push out the right edge */
   }
 
-  /* Global now overlay sits on top of timelines (but under header) */
+  /* past overlay (global, sits above events but below now-line) */
+  #pastOverlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 0px;
+    z-index: 30;
+    pointer-events: none;
+  }
+
+  /* Global now overlay sits above the past overlay and events */
   #globalNowOverlay {
     position: absolute;
     top: 0;
@@ -45,7 +73,7 @@
     left: 0;
     right: 0;
     pointer-events: none;
-    z-index: 8;
+    z-index: 50;
   }
   .now-line {
     position: absolute;
@@ -53,7 +81,7 @@
     bottom: 0;
     pointer-events: none;
     transition: left 0.8s linear;
-    z-index: 50;
+    z-index: 55;
   }
   .now-badge {
     position: absolute;
@@ -74,6 +102,12 @@
 
   /* error box for fetch/render problems */
   #errorBox { background:#fee; color:#800; padding:8px; margin:8px; border:1px solid #f99; display:none; z-index: 100; position: relative; }
+
+  /* small responsiveness */
+  @media (max-width:800px) {
+    .label { width:120px; font-size:14px; }
+    .iconcell { width:64px; min-width:64px; }
+  }
 </style>
 </head>
 <body>
@@ -88,13 +122,16 @@
 <div id="calendarContainer" class="nofit"></div>
 
 <script>
-/* Overlap-aware calendar with small gaps between adjacent columns.
-   GAP_PX controls the gap width in pixels (default 4px).
-   This version ensures event boxes use border-box sizing so percentage widths
-   align exactly with vertical hour-grid lines.
+/* Client-side calendar UI with:
+   - background logo via snapshot.logo_path
+   - right-hand icon column per calendar (uses calendar.icon; if not absolute URL prefix with /static/)
+   - global translucent past overlay between left (workStart) and now line using snapshot.past_overlay
+
+   Persistence fix: render() no longer clears the whole container; it removes only .row elements
+   so the global overlays (now-line, badges and past overlay) persist across refreshes.
 */
 
-const GAP_PX = 4; // <-- change this to increase/decrease gap in pixels
+const GAP_PX = 4; // small gap between overlapping columns
 
 const errorBox = document.getElementById('errorBox');
 const container = document.getElementById('calendarContainer');
@@ -108,12 +145,14 @@ let fitToWindow = true;
 let serverDate = new Date();
 let eventPrefs = { show_times:false, font_size:12, font_family:'Arial, sans-serif', color:'#000' };
 let nowPrefs = { color:'#e74c3c', thickness:2 };
+let pastOverlayPrefs = { color:'#000000', opacity:0.12 };
 let calendarBaseColors = [];
 
 let globalNowOverlay = null;
 let globalNowLine = null;
 let globalNowBadgeTop = null;
 let globalNowBadgeBottom = null;
+let pastOverlay = null;
 
 function showError(msg) {
   errorBox.style.display = 'block';
@@ -126,14 +165,19 @@ function clearError() {
 }
 
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
-function hexToRgb(hex){ hex=hex.replace('#',''); if(hex.length===3) hex=hex.split('').map(c=>c+c).join(''); const bi=parseInt(hex,16); return {r:(bi>>16)&255,g:(bi>>8)&255,b:bi&255}; }
-function rgbToHex(r,g,b){ return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join(''); }
-function rgbToHsl(r,g,b){ r/=255;g/=255;b/=255; const max=Math.max(r,g,b),min=Math.min(r,g,b); let h=0,s=0,l=(max+min)/2; if(max!==min){ const d=max-min; s = l>0.5 ? d/(2-max-min) : d/(max+min); switch(max){case r:h=(g-b)/d + (g<b?6:0);break;case g:h=(b-r)/d + 2;break;case b:h=(r-g)/d + 4;break;} h/=6;} return {h:h*360,s:s*100,l:l*100}; }
-function hslToRgb(h,s,l){ h/=360; s/=100; l/=100; if(s===0){ const v = Math.round(l*255); return {r:v,g:v,b:v}; } function hue2rgb(p,q,t){ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6) return p+(q-p)*6*t; if(t<1/2) return q; if(t<2/3) return p+(q-p)*(2/3-t)*6; return p; } const q = l<0.5 ? l*(1+s) : l + s - l*s; const p = 2*l - q; const r=Math.round(hue2rgb(p,q,h+1/3)*255); const g=Math.round(hue2rgb(p,q,h)*255); const b=Math.round(hue2rgb(p,q,h-1/3)*255); return {r,g,b}; }
-function hslToHex(h,s,l){ const rgb = hslToRgb(h,s,l); return rgbToHex(rgb.r,rgb.g,rgb.b); }
-function shadeHsl(hex, deltaL){ const rgb = hexToRgb(hex); const hsl = rgbToHsl(rgb.r,rgb.g,rgb.b); const nl = clamp(hsl.l + deltaL, 0, 100); return hslToHex(hsl.h, hsl.s, nl); }
-function stringToHue(s){ let h=0; for(let i=0;i<s.length;i++) h=(h*31 + s.charCodeAt(i)) % 360; return h; }
-function hueToHex(h){ return hslToHex(h,65,55); }
+function hexToRgb(hex){ if(!hex) return {r:0,g:0,b:0}; hex=hex.replace('#',''); if(hex.length===3) hex=hex.split('').map(c=>c+c).join(''); const bi=parseInt(hex,16); return {r:(bi>>16)&255,g:(bi>>8)&255,b:bi&255}; }
+function rgbToRgbaStr(rgb, a){ return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`; }
+function shadeHsl(hex, deltaL){
+  // simple approximate shade: scale RGB brightness
+  try {
+    const r = parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+    function clampc(x){ return Math.max(0, Math.min(255, Math.round(x))); }
+    const factor = 1 + (deltaL/100.0);
+    return '#' + [clampc(r*factor), clampc(g*factor), clampc(b*factor)].map(v => v.toString(16).padStart(2,'0')).join('');
+  } catch (e) {
+    return hex || '#cccccc';
+  }
+}
 
 /* text measuring for wrapping */
 const measureCanvas = document.createElement('canvas');
@@ -211,7 +255,12 @@ function applyPrefsFromObject(obj) {
       nowPrefs.color = obj.now_prefs.color || nowPrefs.color;
       nowPrefs.thickness = Number(obj.now_prefs.thickness) || nowPrefs.thickness;
     }
+    if (obj.past_overlay) {
+      pastOverlayPrefs.color = obj.past_overlay.color || pastOverlayPrefs.color;
+      pastOverlayPrefs.opacity = Number(obj.past_overlay.opacity) || pastOverlayPrefs.opacity;
+    }
     calendarBaseColors = Array.isArray(obj.calendar_colors) ? obj.calendar_colors.slice() : [];
+    // logo_path handled in fetchData
   } catch (ex) {
     console.error('applyPrefsFromObject error', ex);
   }
@@ -232,6 +281,17 @@ async function fetchData() {
     dateNote.textContent = serverDate.toDateString();
     hoursNote.textContent = `Hours: ${String(workStart).padStart(2,'0')}:00–${String(workEnd).padStart(2,'0')}:00`;
     if (fitToWindow) container.classList.add('fit'), container.classList.remove('nofit'); else container.classList.add('nofit'), container.classList.remove('fit');
+
+    // apply logo background if provided
+    if (obj.logo_path) {
+      container.style.backgroundImage = `url("${obj.logo_path}")`;
+      // Optional: adjust dimming via ::before if you want (left transparent here)
+      container.style.setProperty('--logo-dim', 'transparent');
+    } else {
+      container.style.backgroundImage = '';
+    }
+
+    // keep overlays persistent and re-render rows
     render();
   } catch (err) {
     showError('Error fetching or parsing data: ' + (err && err.message ? err.message : String(err)));
@@ -243,6 +303,10 @@ function ensureGlobalNowOverlay() {
   if (globalNowOverlay) return;
   globalNowOverlay = document.createElement('div');
   globalNowOverlay.id = 'globalNowOverlay';
+
+  pastOverlay = document.createElement('div');
+  pastOverlay.id = 'pastOverlay';
+
   globalNowLine = document.createElement('div');
   globalNowLine.className = 'now-line';
   globalNowBadgeTop = document.createElement('div');
@@ -251,6 +315,8 @@ function ensureGlobalNowOverlay() {
   globalNowBadgeBottom.className = 'now-badge';
   globalNowBadgeTop.style.top = '4px';
   globalNowBadgeBottom.style.bottom = '4px';
+
+  globalNowOverlay.appendChild(pastOverlay);
   globalNowOverlay.appendChild(globalNowLine);
   globalNowOverlay.appendChild(globalNowBadgeTop);
   globalNowOverlay.appendChild(globalNowBadgeBottom);
@@ -259,11 +325,20 @@ function ensureGlobalNowOverlay() {
 
 function render() {
   try {
-    container.querySelectorAll('.now-overlay-temp')?.forEach(n=>n.remove());
-    container.innerHTML = '';
+    // Remove only existing calendar rows (preserve overlays)
+    container.querySelectorAll('.row').forEach(n => n.remove());
+
+    // Ensure overlays exist and are kept mounted
+    ensureGlobalNowOverlay();
+
     if (!currentData || !currentData.length) {
-      const p = document.createElement('div'); p.style.padding='12px'; p.textContent = 'No calendars found. Please check calendars.txt.'; container.appendChild(p); return;
+      const p = document.createElement('div');
+      p.style.padding = '12px';
+      p.textContent = 'No calendars found. Please check calendars.txt.';
+      container.appendChild(p);
+      return;
     }
+
     const startMin = workStart*60, endMin = workEnd*60, totalRange = Math.max(1, endMin - startMin);
     const hours = workEnd - workStart;
 
@@ -272,6 +347,18 @@ function render() {
       const row = document.createElement('div'); row.className = 'row';
       const label = document.createElement('div'); label.className = 'label'; label.textContent = cal.label || '';
       const timeline = document.createElement('div'); timeline.className = 'timeline';
+      const iconcell = document.createElement('div'); iconcell.className = 'iconcell';
+
+      // icon logic:
+      if (cal.icon) {
+        let src = cal.icon;
+        if (!/^[a-zA-Z]+:\/\//.test(src) && !src.startsWith('/')) {
+          src = '/static/' + src;
+        }
+        const img = document.createElement('img'); img.src = src; img.alt = cal.label || '';
+        img.onerror = () => { img.style.display = 'none'; };
+        iconcell.appendChild(img);
+      }
 
       // hour grid
       for (let i=0;i<=hours;i++){
@@ -287,20 +374,14 @@ function render() {
 
       // determine base colour
       let baseHex = (calIdx < calendarBaseColors.length) ? calendarBaseColors[calIdx] : null;
-      if (!baseHex) baseHex = hueToHex(stringToHue(cal.label || String(calIdx)));
+      if (!baseHex) baseHex = '#2ecc71';
       const shadeA = shadeHsl(baseHex, -6);
       const shadeB = shadeHsl(baseHex, +6);
 
-      // append row now so timeline.clientWidth is measurable for gap calculation
-      row.appendChild(label); row.appendChild(timeline); container.appendChild(row);
+      // append row now so timeline.clientWidth is measurable for calculations
+      row.appendChild(label); row.appendChild(timeline); row.appendChild(iconcell); container.appendChild(row);
 
-      // measure timeline width to compute gap as percent
-      const tlWidth = timeline.clientWidth || timeline.getBoundingClientRect().width || 1;
-      const gapPx = GAP_PX;
-      const gapPct = tlWidth > 0 ? (gapPx / tlWidth) * 100 : 0;
-
-      // ----------- Overlap-aware event layout -------------
-      // Build numeric event list
+      // compute layout for events with overlap avoidance (like prior version)
       const rawEvents = (cal.events || []).map((ev, idx) => {
         return {
           _orig: ev,
@@ -311,10 +392,9 @@ function render() {
       }).filter(e => e.startMin < e.endMin);
 
       if (rawEvents.length > 0) {
-        // sort by start then end
         rawEvents.sort((a,b) => a.startMin - b.startMin || a.endMin - b.endMin);
 
-        // group overlapping events
+        // overlapping groups
         const groups = [];
         let currentGroup = [];
         let currentGroupMaxEnd = -1;
@@ -335,24 +415,23 @@ function render() {
         });
         if (currentGroup.length) groups.push({events: currentGroup, groupStart: currentGroup[0].startMin, groupEnd: currentGroupMaxEnd});
 
-        // assign columns inside each group (greedy)
         groups.forEach(group => {
-          const colsEnd = []; // end time for each column
+          const colsEnd = [];
           group.events.forEach(ev => {
             let col = colsEnd.findIndex(end => ev.startMin >= end);
-            if (col === -1) {
-              col = colsEnd.length;
-              colsEnd.push(ev.endMin);
-            } else {
-              colsEnd[col] = ev.endMin;
-            }
+            if (col === -1) { col = colsEnd.length; colsEnd.push(ev.endMin); }
+            else { colsEnd[col] = ev.endMin; }
             ev.col = col;
           });
           group.cols = colsEnd.length;
           group.events.forEach(ev => ev.groupCols = group.cols);
         });
 
-        // render events using their column assignment so they don't overlap
+        // compute gap percent based on timeline width
+        const tlWidth = timeline.clientWidth || timeline.getBoundingClientRect().width || 1;
+        const gapPx = GAP_PX;
+        const gapPct = tlWidth > 0 ? (gapPx / tlWidth) * 100 : 0;
+
         rawEvents.forEach(ev => {
           const s = Math.max(ev.startMin, startMin);
           const e = Math.min(ev.endMin, endMin);
@@ -363,10 +442,7 @@ function render() {
 
           const cols = ev.groupCols || 1;
           const colIndex = ev.col || 0;
-
-          // subtract gaps that will sit inside this event span for this group's columns
           const totalGroupGapsPct = (cols - 1) * gapPct;
-          // ensure we don't make width negative; clamp
           const usableWidthPct = Math.max(0.1, widthPctBase - totalGroupGapsPct);
           const widthPct = usableWidthPct / cols;
           const leftPct = leftPctBase + colIndex * (widthPct + gapPct);
@@ -381,7 +457,6 @@ function render() {
           div.style.zIndex = 20 + (colIndex || 0);
           timeline.appendChild(div);
 
-          // measure & wrap in next frame
           requestAnimationFrame(() => {
             try {
               const style = getComputedStyle(div);
@@ -409,14 +484,11 @@ function render() {
           });
         });
       }
-
-      // ------------ end overlap-aware layout ------------
     });
 
-    // ensure global overlay exists and is appended last (on top of timelines)
-    ensureGlobalNowOverlay();
+    // overlays persist; update positions
+    updateNowLine();
 
-    updateNowLine(); // position global now line & badges
   } catch (err) {
     showError('Rendering error: ' + (err && err.message ? err.message : String(err)));
     console.error(err);
@@ -438,7 +510,6 @@ function updateNowLine() {
   try {
     if (!globalNowOverlay) return;
     const now = new Date();
-    const isToday = now.toDateString() === serverDate.toDateString();
     const startMin = workStart*60, endMin = workEnd*60, totalRange = Math.max(1, endMin - startMin);
     const minutes = now.getHours()*60 + now.getMinutes();
     let clampedPct;
@@ -447,17 +518,33 @@ function updateNowLine() {
     else clampedPct = ((minutes - startMin) / totalRange) * 100;
 
     const x = computeNowX(clampedPct);
+    const firstTimeline = container.querySelector('.timeline');
+    if (!firstTimeline) {
+      globalNowLine.style.display = 'none';
+      globalNowBadgeTop.style.display = 'none';
+      globalNowBadgeBottom.style.display = 'none';
+      pastOverlay.style.display = 'none';
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const tlRect = firstTimeline.getBoundingClientRect();
+    const tlLeft = tlRect.left - containerRect.left;
+
     if (x === null || Number.isNaN(x)) {
       globalNowLine.style.display = 'none';
       globalNowBadgeTop.style.display = 'none';
       globalNowBadgeBottom.style.display = 'none';
+      pastOverlay.style.display = 'none';
       return;
     }
 
     globalNowLine.style.display = 'block';
     globalNowBadgeTop.style.display = 'block';
     globalNowBadgeBottom.style.display = 'block';
+    pastOverlay.style.display = 'block';
 
+    // now-line styling
     const thicknessPx = (nowPrefs.thickness && Number(nowPrefs.thickness)) ? Number(nowPrefs.thickness) : 2;
     const color = nowPrefs.color || '#e74c3c';
     globalNowLine.style.width = thicknessPx + 'px';
@@ -473,6 +560,16 @@ function updateNowLine() {
     const hh = String(now.getHours()).padStart(2,'0'), mm = String(now.getMinutes()).padStart(2,'0');
     globalNowBadgeTop.textContent = `${hh}:${mm}`;
     globalNowBadgeBottom.textContent = `${hh}:${mm}`;
+
+    // past overlay: span from left of timeline to x
+    const leftPx = tlLeft;
+    const widthPx = Math.max(0, x - tlLeft);
+    pastOverlay.style.left = leftPx + 'px';
+    pastOverlay.style.width = widthPx + 'px';
+    const rgb = hexToRgb(pastOverlayPrefs.color || '#000000');
+    const a = (typeof pastOverlayPrefs.opacity === 'number') ? pastOverlayPrefs.opacity : 0.12;
+    pastOverlay.style.background = `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
+
   } catch (err) {
     console.error('updateNowLine error', err);
   }
