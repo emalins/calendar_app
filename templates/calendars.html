@@ -14,8 +14,8 @@
   .row { display:flex; flex:1 0 auto; min-height:50px; border-bottom:1px solid #e8e8e8; align-items:stretch; }
   .label { width:160px; padding-left:10px; display:flex; align-items:center; font-weight:600; border-right:1px solid #eee; background: #fbfbfb; z-index:2; }
   .timeline { flex:1; position:relative; background:#fff; overflow:visible; }
-  .hour-grid-line { position:absolute; top:0; bottom:0; width:1px; background:#eee; }
-  .hour-label { position:absolute; top:2px; font-size:11px; color:#666; transform:translateX(-50%); }
+  .hour-grid-line { position:absolute; top:0; bottom:0; width:1px; background:#eee; z-index:0; }
+  .hour-label { position:absolute; top:2px; font-size:11px; color:#666; transform:translateX(-50%); z-index:40; }
 
   .event {
     position: absolute;
@@ -32,6 +32,9 @@
     text-align: center;
     white-space: normal;
     word-break: break-word;
+
+    /* IMPORTANT: include padding in width so percent widths align with hour lines */
+    box-sizing: border-box;
   }
 
   /* Global now overlay sits on top of timelines (but under header) */
@@ -50,7 +53,7 @@
     bottom: 0;
     pointer-events: none;
     transition: left 0.8s linear;
-    z-index: 9;
+    z-index: 50;
   }
   .now-badge {
     position: absolute;
@@ -62,7 +65,7 @@
     font-size: 12px;
     pointer-events: none;
     white-space: nowrap;
-    z-index: 10;
+    z-index: 60;
   }
 
   .fit .row { flex:1 1 0; }
@@ -70,7 +73,7 @@
   .meta { margin-left:auto; color:#555; font-size:13px; }
 
   /* error box for fetch/render problems */
-  #errorBox { background:#fee; color:#800; padding:8px; margin:8px; border:1px solid #f99; display:none; z-index: 20; position: relative; }
+  #errorBox { background:#fee; color:#800; padding:8px; margin:8px; border:1px solid #f99; display:none; z-index: 100; position: relative; }
 </style>
 </head>
 <body>
@@ -85,7 +88,13 @@
 <div id="calendarContainer" class="nofit"></div>
 
 <script>
-/* Defensive, corrected client with a single global now overlay (one top badge + one bottom badge). */
+/* Overlap-aware calendar with small gaps between adjacent columns.
+   GAP_PX controls the gap width in pixels (default 4px).
+   This version ensures event boxes use border-box sizing so percentage widths
+   align exactly with vertical hour-grid lines.
+*/
+
+const GAP_PX = 4; // <-- change this to increase/decrease gap in pixels
 
 const errorBox = document.getElementById('errorBox');
 const container = document.getElementById('calendarContainer');
@@ -234,17 +243,14 @@ function ensureGlobalNowOverlay() {
   if (globalNowOverlay) return;
   globalNowOverlay = document.createElement('div');
   globalNowOverlay.id = 'globalNowOverlay';
-  // overlay sits inside calendarContainer, absolute positioned
   globalNowLine = document.createElement('div');
   globalNowLine.className = 'now-line';
   globalNowBadgeTop = document.createElement('div');
   globalNowBadgeTop.className = 'now-badge';
   globalNowBadgeBottom = document.createElement('div');
   globalNowBadgeBottom.className = 'now-badge';
-  // top/bottom positioning
   globalNowBadgeTop.style.top = '4px';
   globalNowBadgeBottom.style.bottom = '4px';
-  // add to overlay
   globalNowOverlay.appendChild(globalNowLine);
   globalNowOverlay.appendChild(globalNowBadgeTop);
   globalNowOverlay.appendChild(globalNowBadgeBottom);
@@ -253,7 +259,7 @@ function ensureGlobalNowOverlay() {
 
 function render() {
   try {
-    container.querySelectorAll('.now-overlay-temp')?.forEach(n=>n.remove()); // cleanup if any
+    container.querySelectorAll('.now-overlay-temp')?.forEach(n=>n.remove());
     container.innerHTML = '';
     if (!currentData || !currentData.length) {
       const p = document.createElement('div'); p.style.padding='12px'; p.textContent = 'No calendars found. Please check calendars.txt.'; container.appendChild(p); return;
@@ -285,54 +291,126 @@ function render() {
       const shadeA = shadeHsl(baseHex, -6);
       const shadeB = shadeHsl(baseHex, +6);
 
-      (cal.events || []).forEach((ev, evIdx) => {
-        if (!ev.start) return;
-        const s = minutesFromHM(ev.start);
-        const e = minutesFromHM(ev.end || ev.start);
-        const cs = Math.max(s, startMin);
-        const ce = Math.min(e, endMin);
-        if (ce <= cs) return;
-        const leftPct = ((cs - startMin) / totalRange) * 100;
-        const widthPct = ((ce - cs) / totalRange) * 100;
-
-        const div = document.createElement('div'); div.className='event';
-        div.style.left = leftPct + '%'; div.style.width = widthPct + '%';
-        const colour = (evIdx % 2 === 0) ? shadeA : shadeB;
-        div.style.background = colour;
-        div.style.color = eventPrefs.color || '#000';
-        div.style.fontSize = (eventPrefs.font_size ? eventPrefs.font_size + 'px' : '12px');
-        div.style.fontFamily = eventPrefs.font_family || 'Arial, sans-serif';
-        timeline.appendChild(div);
-
-        // measure & wrap in next frame
-        requestAnimationFrame(() => {
-          try {
-            const style = getComputedStyle(div);
-            const padL = parseFloat(style.paddingLeft) || 0;
-            const padR = parseFloat(style.paddingRight) || 0;
-            const availableWidth = Math.max(10, div.clientWidth - padL - padR);
-            const boxHeight = Math.max(6, div.clientHeight);
-            let lh;
-            if (style.lineHeight && style.lineHeight !== 'normal') {
-              if (style.lineHeight.endsWith('px')) lh = parseFloat(style.lineHeight);
-              else lh = (eventPrefs.font_size || 12) * 1.2;
-            } else lh = (eventPrefs.font_size || 12) * 1.2;
-            const maxLines = Math.max(1, Math.floor(boxHeight / lh));
-            const labelText = buildEventLabel(ev);
-            const rawLines = wrapTextToLines(labelText, availableWidth, eventPrefs.font_size, eventPrefs.font_family);
-            let lines = rawLines;
-            if (lines.length > maxLines) {
-              const keep = lines.slice(0, maxLines);
-              keep[keep.length - 1] = truncateToWidthWithEllipsis(keep[keep.length - 1], availableWidth, eventPrefs.font_size, eventPrefs.font_family);
-              lines = keep;
-            }
-            function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-            div.innerHTML = lines.map(esc).join('<br>');
-          } catch(inner){ console.error('wrap/render inner error', inner); }
-        });
-      });
-
+      // append row now so timeline.clientWidth is measurable for gap calculation
       row.appendChild(label); row.appendChild(timeline); container.appendChild(row);
+
+      // measure timeline width to compute gap as percent
+      const tlWidth = timeline.clientWidth || timeline.getBoundingClientRect().width || 1;
+      const gapPx = GAP_PX;
+      const gapPct = tlWidth > 0 ? (gapPx / tlWidth) * 100 : 0;
+
+      // ----------- Overlap-aware event layout -------------
+      // Build numeric event list
+      const rawEvents = (cal.events || []).map((ev, idx) => {
+        return {
+          _orig: ev,
+          idx,
+          startMin: minutesFromHM(ev.start || '00:00'),
+          endMin: minutesFromHM(ev.end || ev.start || '00:00'),
+        };
+      }).filter(e => e.startMin < e.endMin);
+
+      if (rawEvents.length > 0) {
+        // sort by start then end
+        rawEvents.sort((a,b) => a.startMin - b.startMin || a.endMin - b.endMin);
+
+        // group overlapping events
+        const groups = [];
+        let currentGroup = [];
+        let currentGroupMaxEnd = -1;
+        rawEvents.forEach(ev => {
+          if (currentGroup.length === 0) {
+            currentGroup.push(ev);
+            currentGroupMaxEnd = ev.endMin;
+          } else {
+            if (ev.startMin < currentGroupMaxEnd) {
+              currentGroup.push(ev);
+              currentGroupMaxEnd = Math.max(currentGroupMaxEnd, ev.endMin);
+            } else {
+              groups.push({events: currentGroup, groupStart: currentGroup[0].startMin, groupEnd: currentGroupMaxEnd});
+              currentGroup = [ev];
+              currentGroupMaxEnd = ev.endMin;
+            }
+          }
+        });
+        if (currentGroup.length) groups.push({events: currentGroup, groupStart: currentGroup[0].startMin, groupEnd: currentGroupMaxEnd});
+
+        // assign columns inside each group (greedy)
+        groups.forEach(group => {
+          const colsEnd = []; // end time for each column
+          group.events.forEach(ev => {
+            let col = colsEnd.findIndex(end => ev.startMin >= end);
+            if (col === -1) {
+              col = colsEnd.length;
+              colsEnd.push(ev.endMin);
+            } else {
+              colsEnd[col] = ev.endMin;
+            }
+            ev.col = col;
+          });
+          group.cols = colsEnd.length;
+          group.events.forEach(ev => ev.groupCols = group.cols);
+        });
+
+        // render events using their column assignment so they don't overlap
+        rawEvents.forEach(ev => {
+          const s = Math.max(ev.startMin, startMin);
+          const e = Math.min(ev.endMin, endMin);
+          if (e <= s) return;
+
+          const leftPctBase = ((s - startMin) / totalRange) * 100;
+          const widthPctBase = ((e - s) / totalRange) * 100;
+
+          const cols = ev.groupCols || 1;
+          const colIndex = ev.col || 0;
+
+          // subtract gaps that will sit inside this event span for this group's columns
+          const totalGroupGapsPct = (cols - 1) * gapPct;
+          // ensure we don't make width negative; clamp
+          const usableWidthPct = Math.max(0.1, widthPctBase - totalGroupGapsPct);
+          const widthPct = usableWidthPct / cols;
+          const leftPct = leftPctBase + colIndex * (widthPct + gapPct);
+
+          const div = document.createElement('div'); div.className = 'event';
+          div.style.left = leftPct + '%'; div.style.width = widthPct + '%';
+          const colour = (ev.idx % 2 === 0) ? shadeA : shadeB;
+          div.style.background = colour;
+          div.style.color = eventPrefs.color || '#000';
+          div.style.fontSize = (eventPrefs.font_size ? eventPrefs.font_size + 'px' : '12px');
+          div.style.fontFamily = eventPrefs.font_family || 'Arial, sans-serif';
+          div.style.zIndex = 20 + (colIndex || 0);
+          timeline.appendChild(div);
+
+          // measure & wrap in next frame
+          requestAnimationFrame(() => {
+            try {
+              const style = getComputedStyle(div);
+              const padL = parseFloat(style.paddingLeft) || 0;
+              const padR = parseFloat(style.paddingRight) || 0;
+              const availableWidth = Math.max(10, div.clientWidth - padL - padR);
+              const boxHeight = Math.max(6, div.clientHeight);
+              let lh;
+              if (style.lineHeight && style.lineHeight !== 'normal') {
+                if (style.lineHeight.endsWith('px')) lh = parseFloat(style.lineHeight);
+                else lh = (eventPrefs.font_size || 12) * 1.2;
+              } else lh = (eventPrefs.font_size || 12) * 1.2;
+              const maxLines = Math.max(1, Math.floor(boxHeight / lh));
+              const labelText = buildEventLabel(ev._orig);
+              const rawLines = wrapTextToLines(labelText, availableWidth, eventPrefs.font_size, eventPrefs.font_family);
+              let lines = rawLines;
+              if (lines.length > maxLines) {
+                const keep = lines.slice(0, maxLines);
+                keep[keep.length - 1] = truncateToWidthWithEllipsis(keep[keep.length - 1], availableWidth, eventPrefs.font_size, eventPrefs.font_family);
+                lines = keep;
+              }
+              function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+              div.innerHTML = lines.map(esc).join('<br>');
+            } catch(inner){ console.error('wrap/render inner error', inner); }
+          });
+        });
+      }
+
+      // ------------ end overlap-aware layout ------------
     });
 
     // ensure global overlay exists and is appended last (on top of timelines)
@@ -347,12 +425,10 @@ function render() {
 
 // Compute pixel X inside container corresponding to time percent
 function computeNowX(clampedPct) {
-  // find first timeline (they all line up horizontally)
   const firstTimeline = container.querySelector('.timeline');
   if (!firstTimeline) return null;
   const containerRect = container.getBoundingClientRect();
   const tlRect = firstTimeline.getBoundingClientRect();
-  // timeline left relative to container
   const leftRel = tlRect.left - containerRect.left;
   const x = leftRel + (clampedPct / 100) * tlRect.width;
   return x;
@@ -378,17 +454,14 @@ function updateNowLine() {
       return;
     }
 
-    // show and position: set left in px and center by margin-left
     globalNowLine.style.display = 'block';
     globalNowBadgeTop.style.display = 'block';
     globalNowBadgeBottom.style.display = 'block';
 
-    // apply color / thickness from prefs
     const thicknessPx = (nowPrefs.thickness && Number(nowPrefs.thickness)) ? Number(nowPrefs.thickness) : 2;
     const color = nowPrefs.color || '#e74c3c';
     globalNowLine.style.width = thicknessPx + 'px';
     globalNowLine.style.background = color;
-    // position with left in px and shift by half thickness so the vertical bar is centered.
     globalNowLine.style.left = x + 'px';
     globalNowLine.style.marginLeft = (thicknessPx / -2) + 'px';
 
@@ -397,7 +470,6 @@ function updateNowLine() {
     globalNowBadgeBottom.style.left = x + 'px';
     globalNowBadgeBottom.style.background = color;
 
-    // update badge text
     const hh = String(now.getHours()).padStart(2,'0'), mm = String(now.getMinutes()).padStart(2,'0');
     globalNowBadgeTop.textContent = `${hh}:${mm}`;
     globalNowBadgeBottom.textContent = `${hh}:${mm}`;
@@ -407,34 +479,23 @@ function updateNowLine() {
 }
 
 // initial load & timers
-// initial load & timers
 fetchData();
+setInterval(fetchData, 300000);   // refresh ICS every 5 minutes
 
-// refresh ICS every 5 minutes (unchanged)
-setInterval(fetchData, 300000);
-
-// Update the now line immediately, then schedule updates aligned to minute boundaries.
-// This avoids drifting and ensures the now-bar moves when the minute changes.
+// aligned minute updates for now-line
 function scheduleAlignedNowUpdates() {
-  // update immediately for page load
   try { updateNowLine(); } catch (e) { console.error('updateNowLine immediate error', e); }
-
-  // compute ms until start of next minute
   const now = new Date();
   const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
-
-  // after waiting until the top of the minute, run update and then set a fixed interval every 60s
   setTimeout(() => {
     try { updateNowLine(); } catch (e) { console.error('updateNowLine timeout error', e); }
-    // then update every full minute
     setInterval(() => {
       try { updateNowLine(); } catch (e) { console.error('updateNowLine interval error', e); }
     }, 60 * 1000);
   }, msUntilNextMinute);
 }
-
-// Start aligned now updates
 scheduleAlignedNowUpdates();
+
 </script>
 
 </body>
