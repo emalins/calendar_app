@@ -1,12 +1,12 @@
 # Working hours (integers 0-23)
 WORK_START_HOUR=08
-WORK_END_HOUR=22
+WORK_END_HOUR=18
 
 # Fit rows to window? true/false
 FIT_TO_WINDOW=true
 
 # Header text + style
-HEADER_TEXT=What's on today
+HEADER_TEXT=What's on at the DTC today
 HEADER_FONT_SIZE=20
 HEADER_FONT_FAMILY=Arial, sans-serif
 HEADER_COLOR=#1a1a1a
@@ -24,3 +24,7 @@ CALENDAR_COLORS=#2ecc71,#3498db,#f39c12
 # Now-line style
 NOW_LINE_COLOR=#e74c3c
 NOW_LINE_THICKNESS=3
+
+LOGO_PATH=/static/logo.jpg
+PAST_OVERLAY_COLOR=#0000f1
+PAST_OVERLAY_OPACITY=0.32
