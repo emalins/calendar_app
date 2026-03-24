@@ -13,7 +13,7 @@ This version supports:
 """
 
 from flask import Flask, jsonify, render_template
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from icalendar import Calendar
 import requests
 import re
@@ -196,6 +196,84 @@ def get_calendar_colors(prefs):
 
 # === ICS fetching & parsing ===
 
+def _flatten_ical_datetime_values(prop):
+    """Return a list of decoded datetime/date values from an icalendar property."""
+    if prop is None:
+        return []
+
+    # icalendar may return a single vDDDTypes, a vDDDLists container, or a plain list.
+    values = []
+    candidates = prop if isinstance(prop, (list, tuple, set)) else [prop]
+    for item in candidates:
+        if item is None:
+            continue
+        if hasattr(item, "dts"):
+            for dt_item in item.dts:
+                values.append(getattr(dt_item, "dt", dt_item))
+            continue
+        values.append(getattr(item, "dt", item))
+    return values
+
+
+def _event_occurs_on_date(comp, target_date):
+    """
+    Return True when a VEVENT should be included for target_date.
+
+    This handles both plain VEVENTs and recurring masters with RRULE plus
+    exception instances provided via RECURRENCE-ID.
+    """
+    dtstart = comp.get("dtstart")
+    if not dtstart:
+        return False
+
+    start = dtstart.dt
+    dtend = comp.get("dtend")
+    end = dtend.dt if dtend else start
+
+    # Skip all-day events for compatibility with the original dashboard logic.
+    from datetime import date as _date, datetime as _datetime
+    if isinstance(start, _date) and not isinstance(start, _datetime):
+        return False
+
+    # Fast path for non-recurring events and exception instances.
+    try:
+        if start.date() == target_date:
+            return True
+        if isinstance(end, _datetime) and start.date() <= target_date <= end.date():
+            return True
+    except Exception:
+        pass
+
+    # Recurring master: expand occurrences and check whether one lands on the target day.
+    rrule_prop = comp.get("rrule")
+    if rrule_prop:
+        try:
+            from dateutil.rrule import rruleset, rrulestr
+
+            rule_text = str(rrule_prop)
+            if not rule_text.upper().startswith("RRULE:"):
+                rule_text = "RRULE:" + rule_text
+
+            rs = rruleset()
+            rs.rrule(rrulestr(rule_text, dtstart=start))
+
+            for exdate in _flatten_ical_datetime_values(comp.get("exdate")):
+                rs.exdate(exdate)
+            for rdate in _flatten_ical_datetime_values(comp.get("rdate")):
+                rs.rdate(rdate)
+
+            day_start = datetime.combine(target_date, datetime.min.time())
+            if isinstance(start, _datetime) and start.tzinfo is not None:
+                day_start = day_start.replace(tzinfo=start.tzinfo)
+            day_end = day_start + timedelta(days=1)
+            if rs.between(day_start, day_end, inc=True):
+                return True
+        except Exception:
+            # Fall back to the direct date checks above.
+            pass
+
+    return False
+
 def read_ics_events_for_date(ics_url, target_date):
     """
     Fetch the ICS file and return a list of dicts: {title, start, end}
@@ -206,26 +284,38 @@ def read_ics_events_for_date(ics_url, target_date):
     resp.raise_for_status()
     cal = Calendar.from_ical(resp.content)
     events = []
+
     for comp in cal.walk():
         if comp.name != "VEVENT":
             continue
+
+        if not _event_occurs_on_date(comp, target_date):
+            continue
+
         summary = str(comp.get("summary") or "")
         dtstart = comp.get("dtstart")
         dtend = comp.get("dtend")
         if not dtstart:
             continue
+
         start = dtstart.dt
         end = dtend.dt if dtend else start
-        # skip all-day events (date objects without time)
+
+        # Skip all-day events (date objects without time) for compatibility with the
+        # original dashboard behaviour.
         from datetime import date as _date, datetime as _datetime
         if isinstance(start, _date) and not isinstance(start, _datetime):
             continue
-        # include only events that start on target_date
+
         try:
-            if start.date() == target_date:
-                events.append({"title": summary, "start": start.strftime("%H:%M"), "end": end.strftime("%H:%M")})
+            events.append({
+                "title": summary,
+                "start": start.strftime("%H:%M"),
+                "end": end.strftime("%H:%M"),
+            })
         except Exception:
             continue
+
     # sort by start
     events.sort(key=lambda e: e.get("start") or "99:99")
     return events
