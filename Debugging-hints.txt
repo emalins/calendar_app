@@ -1,0 +1,1 @@
+The app will present a snapshot of the information it's working on here: http://localhost:5000/api/events
