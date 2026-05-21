@@ -29,12 +29,22 @@
 
   .row { display:flex; flex:1 0 auto; min-height:68px; border-bottom:1px solid #e8e8e8; align-items:stretch; position:relative; z-index:2; }
   .label { width:160px; padding-left:10px; display:flex; align-items:center; font-weight:600; border-right:1px solid #eee; background: rgba(251,251,251,0.9); z-index:3; }
-  .timeline { flex:1; position:relative; background:transparent; overflow:visible; z-index:2; }
+  .timeline { flex:1; position:relative; background:transparent; overflow:visible; z-index:4; }
   .iconcell { width:84px; min-width:84px; padding:6px; border-left:1px solid #eee; display:flex; align-items:center; justify-content:center; background: rgba(251,251,251,0.9); z-index:3; }
   .iconcell img { max-width:64px; max-height:56px; object-fit:contain; display:block; }
 
   .hour-grid-line { position:absolute; top:0; bottom:0; width:1px; background:#eee; z-index:2; }
-  .hour-label { position:absolute; top:6px; font-size:11px; color:#666; transform:translateX(-50%); z-index:40; }
+  .hour-label {
+    position:absolute;
+    top:6px;
+    font-size:var(--hour-label-font-size, 12px);
+    font-family:var(--hour-label-font-family, Arial, sans-serif);
+    color:var(--hour-label-color, #000000);
+    transform:translateX(-50%);
+    z-index:80;
+    pointer-events:none;
+    text-shadow:0 1px 2px rgba(255,255,255,0.85);
+  }
 
   .event {
     position: absolute;
@@ -139,11 +149,20 @@ const headerTextEl = document.getElementById('headerText');
 const dateNote = document.getElementById('dateNote');
 const hoursNote = document.getElementById('hoursNote');
 
+/* To format server date to in a long format rather than 13/12/2006 format */
+const serverDateOptions = {
+  weekday: "long",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+};
+
 let currentData = null;
 let workStart = 8, workEnd = 18;
 let fitToWindow = true;
 let serverDate = new Date();
 let eventPrefs = { show_times:false, font_size:12, font_family:'Arial, sans-serif', color:'#000' };
+let hourLabelPrefs = { font_size:12, font_family:'Arial, sans-serif', color:'#000000' };
 let nowPrefs = { color:'#e74c3c', thickness:2 };
 let pastOverlayPrefs = { color:'#000000', opacity:0.12 };
 let calendarBaseColors = [];
@@ -251,6 +270,15 @@ function applyPrefsFromObject(obj) {
       eventPrefs.font_family = obj.event_prefs.font_family || 'Arial, sans-serif';
       eventPrefs.color = obj.event_prefs.color || '#000';
     }
+    if (obj.hour_label_prefs) {
+      hourLabelPrefs.font_size = Number(obj.hour_label_prefs.font_size) || 12;
+      hourLabelPrefs.font_family = obj.hour_label_prefs.font_family || 'Arial, sans-serif';
+      hourLabelPrefs.color = obj.hour_label_prefs.color || '#000000';
+    }
+    container.style.setProperty('--hour-label-font-size', hourLabelPrefs.font_size + 'px');
+    container.style.setProperty('--hour-label-font-family', hourLabelPrefs.font_family);
+    container.style.setProperty('--hour-label-color', hourLabelPrefs.color);
+
     if (obj.now_prefs) {
       nowPrefs.color = obj.now_prefs.color || nowPrefs.color;
       nowPrefs.thickness = Number(obj.now_prefs.thickness) || nowPrefs.thickness;
@@ -278,7 +306,7 @@ async function fetchData() {
     if (!obj) { showError('Empty response from server'); return; }
     applyPrefsFromObject(obj);
     currentData = Array.isArray(obj.calendars) ? obj.calendars : (obj.calendars || []);
-    dateNote.textContent = serverDate.toDateString();
+    dateNote.textContent = serverDate.toLocaleDateString("en-GB",serverDateOptions);    
     hoursNote.textContent = `Hours: ${String(workStart).padStart(2,'0')}:00–${String(workEnd).padStart(2,'0')}:00`;
     if (fitToWindow) container.classList.add('fit'), container.classList.remove('nofit'); else container.classList.add('nofit'), container.classList.remove('fit');
 
@@ -368,6 +396,11 @@ function render() {
         timeline.appendChild(line);
         if (i < hours) {
           const hl = document.createElement('div'); hl.className='hour-label'; hl.style.left = pos + '%';
+          // Apply preferences inline as well as via CSS variables, so the labels
+          // keep the requested style even if external CSS is cached or overridden.
+          hl.style.color = hourLabelPrefs.color || '#000000';
+          hl.style.fontSize = (hourLabelPrefs.font_size || 12) + 'px';
+          hl.style.fontFamily = hourLabelPrefs.font_family || 'Arial, sans-serif';
           hl.textContent = String(hour).padStart(2,'0') + ':00'; timeline.appendChild(hl);
         }
       }
