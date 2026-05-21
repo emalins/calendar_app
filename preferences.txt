@@ -25,6 +25,13 @@ CALENDAR_COLORS=#2ecc71,#3498db,#f39c12
 NOW_LINE_COLOR=#e74c3c
 NOW_LINE_THICKNESS=3
 
+# Hour label style (time axis labels)
+# Defaults are black Arial 12px if these are omitted.
+# Pink if you want it HOUR_LABEL_COLOR=#e534eb
+HOUR_LABEL_COLOR=#000000
+HOUR_LABEL_FONT_FAMILY=Arial, sans-serif
+HOUR_LABEL_FONT_SIZE=12
+
 LOGO_PATH=/static/logo.jpg
 PAST_OVERLAY_COLOR=#0000f1
 PAST_OVERLAY_OPACITY=0.32

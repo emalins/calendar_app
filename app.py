@@ -12,11 +12,12 @@ ICS handling is recurrence-aware and includes support for:
  - RDATE additions
  - UID-based de-duplication
  - STATUS:CANCELLED filtering
- - optional all-day events via SHOW_ALL_DAY_EVENTS=true
+ - all-day events shown by default, spanning configured work hours
  - timezone selection via TIMEZONE=Europe/London
  - display date selection via DISPLAY_DATE=today or DISPLAY_DATE=YYYY-MM-DD
  - HTTP retries and in-memory ETag/Last-Modified caching
  - last-known-good events when a calendar fetch temporarily fails
+ - hour-label styling via HOUR_LABEL_* preferences
 """
 
 from flask import Flask, jsonify, render_template
@@ -47,8 +48,8 @@ PREFERENCES_FILE = "preferences.txt"
 REFRESH_INTERVAL_SECONDS = 300  # 5 minutes
 DEFAULT_TZ = "Europe/London"
 HTTP_TIMEOUT_SECONDS = 20
-HTTP_USER_AGENT = "calendar-dashboard/3.0"
-APP_VERSION = "display-date-fixed-v2"
+HTTP_USER_AGENT = "calendar-dashboard/3.1"
+APP_VERSION = "hour-label-prefs-v4"
 
 # Defaults (used when preferences are missing / invalid)
 DEFAULT_WORK_START = 8
@@ -64,14 +65,18 @@ DEFAULT_EVENT_FONT_SIZE = 12
 DEFAULT_EVENT_FONT_FAMILY = "Arial, sans-serif"
 DEFAULT_EVENT_FONT_COLOR = "#000000"
 
+DEFAULT_HOUR_LABEL_FONT_SIZE = 12
+DEFAULT_HOUR_LABEL_FONT_FAMILY = "Arial, sans-serif"
+DEFAULT_HOUR_LABEL_COLOR = "#000000"
+
 DEFAULT_NOW_COLOR = "#e74c3c"
 DEFAULT_NOW_THICKNESS = 2
 
 DEFAULT_PAST_OVERLAY_COLOR = "#000000"
 DEFAULT_PAST_OVERLAY_OPACITY = 0.12
 
-# Keep original dashboard behaviour unless explicitly enabled.
-DEFAULT_SHOW_ALL_DAY_EVENTS = False
+# Show all-day room bookings by default. Set SHOW_ALL_DAY_EVENTS=false to hide them.
+DEFAULT_SHOW_ALL_DAY_EVENTS = True
 DEFAULT_DISPLAY_DATE = "today"
 
 # === App & cache globals ===
@@ -229,6 +234,27 @@ def get_event_prefs(prefs):
     fam = prefs.get("EVENT_FONT_FAMILY", DEFAULT_EVENT_FONT_FAMILY)
     color = prefs.get("EVENT_FONT_COLOR", DEFAULT_EVENT_FONT_COLOR)
     return {"show_times": show_times, "font_size": size, "font_family": fam, "color": color}
+
+
+def get_hour_label_prefs(prefs):
+    """Return styling preferences for hour labels on the time axis.
+
+    Supported preferences:
+      HOUR_LABEL_COLOR=#000000
+      HOUR_LABEL_FONT_FAMILY=Arial, sans-serif
+      HOUR_LABEL_FONT_SIZE=12
+    """
+    color = prefs.get("HOUR_LABEL_COLOR", DEFAULT_HOUR_LABEL_COLOR)
+    fam = prefs.get("HOUR_LABEL_FONT_FAMILY", DEFAULT_HOUR_LABEL_FONT_FAMILY)
+    try:
+        size = int(prefs.get("HOUR_LABEL_FONT_SIZE", DEFAULT_HOUR_LABEL_FONT_SIZE))
+    except Exception:
+        size = DEFAULT_HOUR_LABEL_FONT_SIZE
+    if size < 6:
+        size = 6
+    if size > 72:
+        size = 72
+    return {"font_size": size, "font_family": fam, "color": color}
 
 
 def get_now_prefs(prefs):
@@ -475,7 +501,12 @@ def normalize_occurrence_key(dt_value, target_tz, all_day=False):
 
 
 def get_end_datetime(comp, start_value, target_tz):
-    """Return the event end as a timezone-aware datetime, or None."""
+    """Return the event end as a timezone-aware datetime, or None.
+
+    RFC 5545 treats DTEND on all-day VALUE=DATE events as exclusive. If an
+    all-day event omits DTEND and DURATION, treat it as a one-day event rather
+    than a zero-length event so it can still overlap and display on its date.
+    """
     start_dt = to_datetime(start_value, target_tz)
     if start_dt is None:
         return None
@@ -491,6 +522,9 @@ def get_end_datetime(comp, start_value, target_tz):
         dur = get_raw_value(duration_value)
         if isinstance(dur, timedelta):
             return start_dt + dur
+
+    if is_date_only(start_value):
+        return start_dt + timedelta(days=1)
 
     return start_dt
 
@@ -509,14 +543,32 @@ def event_overlaps_datetimes(start_dt, end_dt, target_date, target_tz):
 
 def event_overlaps_date(start_value, end_value, target_date, target_tz):
     start_dt = to_datetime(start_value, target_tz)
-    end_dt = to_datetime(end_value, target_tz) if end_value is not None else start_dt
+    if end_value is not None:
+        end_dt = to_datetime(end_value, target_tz)
+    elif is_date_only(start_value):
+        end_dt = start_dt + timedelta(days=1) if start_dt is not None else None
+    else:
+        end_dt = start_dt
     return event_overlaps_datetimes(start_dt, end_dt, target_date, target_tz)
 
 
-def format_span(start_dt, end_dt, target_date, target_tz, all_day=False):
-    """Format the visible portion of an event on the target date."""
+def format_span(
+    start_dt,
+    end_dt,
+    target_date,
+    target_tz,
+    all_day=False,
+    all_day_start_hour=DEFAULT_WORK_START,
+    all_day_end_hour=DEFAULT_WORK_END,
+):
+    """Format the visible portion of an event on the target date.
+
+    The existing dashboard front end expects concrete HH:MM start/end values.
+    For all-day events, return the configured workday span so the graphical
+    view has a visible block, while preserving true ISO start/end separately.
+    """
     if all_day:
-        return "", ""
+        return f"{int(all_day_start_hour):02d}:00", f"{int(all_day_end_hour):02d}:00"
 
     day_start = datetime.combine(target_date, datetime_time.min).replace(tzinfo=target_tz)
     day_end = day_start + timedelta(days=1)
@@ -701,14 +753,34 @@ def coerce_target_date(target_date, target_tz):
     return dtparser.parse(str(target_date)).date()
 
 
-def make_event_dict(comp, summary, start_dt, end_dt, target_date, target_tz, all_day, recurrence_key):
-    start_str, end_str = format_span(start_dt, end_dt, target_date, target_tz, all_day=all_day)
+def make_event_dict(
+    comp,
+    summary,
+    start_dt,
+    end_dt,
+    target_date,
+    target_tz,
+    all_day,
+    recurrence_key,
+    all_day_start_hour=DEFAULT_WORK_START,
+    all_day_end_hour=DEFAULT_WORK_END,
+):
+    start_str, end_str = format_span(
+        start_dt,
+        end_dt,
+        target_date,
+        target_tz,
+        all_day=all_day,
+        all_day_start_hour=all_day_start_hour,
+        all_day_end_hour=all_day_end_hour,
+    )
     uid = component_uid(comp)
     return {
         "title": summary,
         "start": start_str,
         "end": end_str,
         "all_day": bool(all_day),
+        "display_as_all_day": bool(all_day),
         "uid": uid,
         "start_iso": start_dt.isoformat() if start_dt else "",
         "end_iso": end_dt.isoformat() if end_dt else "",
@@ -717,7 +789,14 @@ def make_event_dict(comp, summary, start_dt, end_dt, target_date, target_tz, all
     }
 
 
-def read_ics_events_for_date(ics_url, target_date, tz_name=DEFAULT_TZ, show_all_day_events=DEFAULT_SHOW_ALL_DAY_EVENTS):
+def read_ics_events_for_date(
+    ics_url,
+    target_date,
+    tz_name=DEFAULT_TZ,
+    show_all_day_events=DEFAULT_SHOW_ALL_DAY_EVENTS,
+    all_day_start_hour=DEFAULT_WORK_START,
+    all_day_end_hour=DEFAULT_WORK_END,
+):
     """
     Fetch the ICS file and return a list of event dicts.
 
@@ -749,7 +828,20 @@ def read_ics_events_for_date(ics_url, target_date, tz_name=DEFAULT_TZ, show_all_
         if dedupe_key in seen:
             return
         seen.add(dedupe_key)
-        events.append(make_event_dict(comp, summary, start_dt, end_dt, target_date, target_tz, all_day, recurrence_key))
+        events.append(
+            make_event_dict(
+                comp,
+                summary,
+                start_dt,
+                end_dt,
+                target_date,
+                target_tz,
+                all_day,
+                recurrence_key,
+                all_day_start_hour=all_day_start_hour,
+                all_day_end_hour=all_day_end_hour,
+            )
+        )
 
     for comp in components:
         if is_cancelled(comp):
@@ -797,7 +889,7 @@ def read_ics_events_for_date(ics_url, target_date, tz_name=DEFAULT_TZ, show_all_
 
     events.sort(
         key=lambda ev: (
-            1 if not ev.get("start") else 0,
+            0 if ev.get("all_day") else 1,
             datetime.strptime(ev["start"], "%H:%M").time() if ev.get("start") else datetime_time.min,
             ev.get("title", "").lower(),
         )
@@ -821,6 +913,7 @@ def build_snapshot_for_display_date():
     fit_to_window = get_pref_bool(prefs, "FIT_TO_WINDOW", DEFAULT_FIT_TO_WINDOW)
     header = get_header_prefs(prefs)
     event_prefs = get_event_prefs(prefs)
+    hour_label_prefs = get_hour_label_prefs(prefs)
     now_prefs = get_now_prefs(prefs)
     past_overlay = get_past_overlay_prefs(prefs)
     calendar_colors = get_calendar_colors(prefs)
@@ -832,6 +925,7 @@ def build_snapshot_for_display_date():
         "fit_to_window": fit_to_window,
         "header": header,
         "event_prefs": event_prefs,
+        "hour_label_prefs": hour_label_prefs,
         "now_prefs": now_prefs,
         "past_overlay": past_overlay,
         "logo_path": logo_path,
@@ -866,6 +960,8 @@ def build_snapshot_for_display_date():
                 display_date,
                 tz_name=tz_name,
                 show_all_day_events=show_all_day_events,
+                all_day_start_hour=work_start,
+                all_day_end_hour=work_end,
             )
             calendar_entry["events"] = events
             calendar_entry["status"] = "ok"
