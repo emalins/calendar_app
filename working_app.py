@@ -85,7 +85,6 @@ DEFAULT_ROTATE_LOGO_ORDER = 'sequential'  # 'sequential' or 'random'
 DEFAULT_CATURDAY = False
 DEFAULT_CATURDAY_DAY = "Friday"
 DEFAULT_CATURDAY_PATH = "/static/caturday"
-DEFAULT_VERBOSE_STARTUP = False
 
 # === App & cache globals ===
 # Ensure template_folder works when frozen by PyInstaller.
@@ -1229,83 +1228,6 @@ def refresh_loop():
             traceback.print_exc()
 
 
-def print_startup_config():
-    """Print a human-readable summary of the active configuration to the console."""
-    try:
-        prefs = read_preferences_file()
-    except Exception as ex:
-        print("[app.py] Could not read preferences for startup summary: {}".format(ex))
-        return
-
-    p = lambda msg: print("[app.py]   {}".format(msg))
-
-    print("[app.py] --- Configuration summary ---")
-
-    # Refresh interval
-    interval = get_refresh_interval_seconds()
-    p("Refresh interval : {}s ({} min)".format(interval, interval // 60))
-
-    # Timezone / display date
-    tz_name = prefs.get("TIMEZONE", DEFAULT_TZ)
-    display_date = prefs.get("DISPLAY_DATE", DEFAULT_DISPLAY_DATE)
-    p("Timezone         : {}".format(tz_name))
-    p("Display date     : {}".format(display_date))
-
-    # Work hours
-    work_start = prefs.get("WORK_START_HOUR", DEFAULT_WORK_START)
-    work_end   = prefs.get("WORK_END_HOUR",   DEFAULT_WORK_END)
-    p("Work hours       : {:02}:00 – {:02}:00".format(int(work_start), int(work_end)))
-
-    # Caturday
-    caturday_enabled = get_pref_bool(prefs, 'CATURDAY', DEFAULT_CATURDAY)
-    if caturday_enabled:
-        caturday_day  = prefs.get('CATURDAY_DAY',  DEFAULT_CATURDAY_DAY)
-        caturday_path = prefs.get('CATURDAY_PATH', DEFAULT_CATURDAY_PATH)
-        p("Caturday         : ON  (day={}, path={})".format(caturday_day, caturday_path))
-        fs_path, _ = resolve_logo_source(caturday_path)
-        if fs_path and os.path.isdir(fs_path):
-            images = list_image_files(fs_path)
-            p("  Caturday images: {} file(s)".format(len(images)))
-            for img in images:
-                p("    {}".format(os.path.basename(img)))
-        elif fs_path:
-            p("  Caturday image : {}".format(os.path.basename(fs_path)))
-        else:
-            p("  Caturday path  : NOT FOUND ({})".format(caturday_path))
-    else:
-        p("Caturday         : OFF")
-
-    # Logo
-    logo_path = prefs.get('LOGO_PATH', '')
-    rotate_images = get_pref_bool(prefs, 'ROTATE_IMAGES', DEFAULT_ROTATE_IMAGES)
-    if rotate_images:
-        try:
-            rotate_minutes = int(prefs.get('ROTATE_LOGO_TIME_MINUTES', DEFAULT_ROTATE_LOGO_TIME_MINUTES))
-        except Exception:
-            rotate_minutes = DEFAULT_ROTATE_LOGO_TIME_MINUTES
-        rotate_order = str(prefs.get('ROTATE_LOGO_ORDER', DEFAULT_ROTATE_LOGO_ORDER)).strip().lower()
-        p("Logo rotation    : ON  (every {}min, order={})".format(rotate_minutes, rotate_order))
-        fs_path, _ = resolve_logo_source(logo_path)
-        if fs_path and os.path.isdir(fs_path):
-            images = list_image_files(fs_path)
-            p("  Rotation pool  : {} file(s) from {}".format(len(images), logo_path))
-            for img in images:
-                p("    {}".format(os.path.basename(img)))
-        elif fs_path:
-            p("  Logo (single)  : {}".format(logo_path))
-        else:
-            p("  Logo path      : NOT FOUND ({})".format(logo_path))
-    else:
-        p("Logo rotation    : OFF")
-        fs_path, _ = resolve_logo_source(logo_path)
-        if fs_path:
-            p("  Logo           : {}".format(logo_path))
-        else:
-            p("  Logo           : NOT FOUND ({})".format(logo_path))
-
-    print("[app.py] --- End of configuration summary ---")
-
-
 def start_background_refresher():
     t = threading.Thread(target=refresh_loop, name="calendar-refresher", daemon=True)
     t.start()
@@ -1314,12 +1236,6 @@ def start_background_refresher():
     print("[app.py] Config dir: {}".format(CONFIG_DIR))
     print("[app.py] Preferences file: {}".format(resolve_config_path(PREFERENCES_FILE)))
     print("[app.py] Calendars file: {}".format(resolve_config_path(CALENDAR_FILE)))
-    try:
-        prefs = read_preferences_file()
-        if get_pref_bool(prefs, 'VERBOSE_STARTUP', DEFAULT_VERBOSE_STARTUP):
-            print_startup_config()
-    except Exception:
-        pass
 
 
 # === Flask routes ===

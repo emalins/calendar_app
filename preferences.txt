@@ -18,7 +18,7 @@ EVENT_FONT_FAMILY=Arial, sans-serif
 EVENT_FONT_COLOR=#000000
 
 #How often to look for new calendar events
-REFRESH_INTERVAL_MINUTES=1
+REFRESH_INTERVAL_MINUTES=5
 
 # Calendar colours (optional, comma-separated hex). Example:
 # CALENDAR_COLORS=#2ecc71,#3498db,#9b59b6
@@ -38,7 +38,7 @@ HOUR_LABEL_FONT_SIZE=12
 #Background logos / images
 LOGO_PATH=/static/logos/DTC_Logo_4K_White.jpg
 ROTATE_IMAGES=TRUE
-ROTATE_LOGO_TIME_MINUTES=1
+ROTATE_LOGO_TIME_MINUTES=5
 
 #Alternative is ROTATE_LOGO_ORDER=SEQUENTIAL
 ROTATE_LOGO_ORDER=RANDOM
@@ -51,3 +51,6 @@ CATURDAY_DAY=Sunday
 PAST_OVERLAY_COLOR=#0000f1
 PAST_OVERLAY_OPACITY=0.32
 DISPLAY_DATE=today
+
+#Print configuration information on startup
+VERBOSE_STARTUP=TRUE
