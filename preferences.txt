@@ -17,6 +17,9 @@ EVENT_FONT_SIZE=18
 EVENT_FONT_FAMILY=Arial, sans-serif
 EVENT_FONT_COLOR=#000000
 
+#How often to look for new calendar events
+REFRESH_INTERVAL_MINUTES=1
+
 # Calendar colours (optional, comma-separated hex). Example:
 # CALENDAR_COLORS=#2ecc71,#3498db,#9b59b6
 CALENDAR_COLORS=#2ecc71,#3498db,#f39c12
@@ -33,6 +36,11 @@ HOUR_LABEL_FONT_FAMILY=Arial, sans-serif
 HOUR_LABEL_FONT_SIZE=12
 
 LOGO_PATH=/static/logo.jpg
+ROTATE_IMAGES=TRUE
+ROTATE_LOGO_TIME_MINUTES=1
+CATURDAY_PATH=/static/caturday
+CATURDAY=ON
+CATURDAY_DAY=Sunday
 PAST_OVERLAY_COLOR=#0000f1
 PAST_OVERLAY_OPACITY=0.32
 

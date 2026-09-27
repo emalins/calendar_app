@@ -12,17 +12,10 @@
   /* Make container positioned so overlay can be absolutely placed inside it */
   #calendarContainer {
     flex:1; display:flex; flex-direction:column; overflow:auto; padding-bottom:8px; position:relative;
-  }
-  /* Two logo layers for crossfade — JS toggles which is visible */
-  .logo-layer {
-    position: absolute;
-    inset: 0;
+    /* logo will be set inline via JS using snapshot.logo_path */
     background-position: center;
     background-repeat: no-repeat;
     background-size: contain;
-    pointer-events: none;
-    transition: opacity 1.5s ease;
-    z-index: 0;
   }
   /* semi-opaque overlay under content so logo doesn't reduce readability */
   #calendarContainer::before {
@@ -126,10 +119,7 @@
 </header>
 
 <div id="errorBox" role="alert"></div>
-<div id="calendarContainer" class="nofit">
-  <div class="logo-layer" id="logoLayerA"></div>
-  <div class="logo-layer" id="logoLayerB" style="opacity:0"></div>
-</div>
+<div id="calendarContainer" class="nofit"></div>
 
 <script>
 /* Client-side calendar UI with:
@@ -153,45 +143,6 @@ let currentData = null;
 let fetchIntervalMs = 300000; // updated from API response
 let fetchTimer = null;
 let workStart = 8, workEnd = 18;
-
-// Logo crossfade state
-const logoLayerA = document.getElementById('logoLayerA');
-const logoLayerB = document.getElementById('logoLayerB');
-let logoActiveLayer = logoLayerA;   // currently visible layer
-let logoInactiveLayer = logoLayerB; // layer fading in next
-let currentLogoPath = '';
-
-function setLogo(path) {
-  if (path === currentLogoPath) return; // no change, nothing to do
-  currentLogoPath = path;
-  if (!path) {
-    // clear both layers
-    logoLayerA.style.backgroundImage = '';
-    logoLayerB.style.backgroundImage = '';
-    logoLayerA.style.opacity = '0';
-    logoLayerB.style.opacity = '0';
-    return;
-  }
-  // preload the image before fading in to avoid a flash of the old image
-  const img = new Image();
-  img.onload = function() {
-    logoInactiveLayer.style.backgroundImage = `url("${path}")`;
-    logoInactiveLayer.style.opacity = '1';
-    logoActiveLayer.style.opacity = '0';
-    // swap references
-    const tmp = logoActiveLayer;
-    logoActiveLayer = logoInactiveLayer;
-    logoInactiveLayer = tmp;
-  };
-  img.onerror = function() {
-    // image failed to load — clear both so we don't show a broken state
-    logoLayerA.style.backgroundImage = '';
-    logoLayerB.style.backgroundImage = '';
-    logoLayerA.style.opacity = '0';
-    logoLayerB.style.opacity = '0';
-  };
-  img.src = path;
-}
 let fitToWindow = true;
 let serverDate = new Date();
 let eventPrefs = { show_times:false, font_size:12, font_family:'Arial, sans-serif', color:'#000' };
@@ -341,8 +292,14 @@ async function fetchData() {
     hoursNote.textContent = `Hours: ${String(workStart).padStart(2,'0')}:00–${String(workEnd).padStart(2,'0')}:00`;
     if (fitToWindow) container.classList.add('fit'), container.classList.remove('nofit'); else container.classList.add('nofit'), container.classList.remove('fit');
 
-    // apply logo with crossfade
-    setLogo(obj.logo_path || '');
+    // apply logo background if provided
+    if (obj.logo_path) {
+      container.style.backgroundImage = `url("${obj.logo_path}")`;
+      // Optional: adjust dimming via ::before if you want (left transparent here)
+      container.style.setProperty('--logo-dim', 'transparent');
+    } else {
+      container.style.backgroundImage = '';
+    }
 
     // keep overlays persistent and re-render rows
     render();
