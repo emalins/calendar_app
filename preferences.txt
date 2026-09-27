@@ -35,13 +35,19 @@ HOUR_LABEL_COLOR=#000000
 HOUR_LABEL_FONT_FAMILY=Arial, sans-serif
 HOUR_LABEL_FONT_SIZE=12
 
-LOGO_PATH=/static/logo.jpg
+#Background logos / images
+LOGO_PATH=/static/logos/DTC_Logo_4K_White.jpg
 ROTATE_IMAGES=TRUE
 ROTATE_LOGO_TIME_MINUTES=1
+
+#Alternative is ROTATE_LOGO_ORDER=SEQUENTIAL
+ROTATE_LOGO_ORDER=RANDOM
+
+#Important settings regarding pet pictures
 CATURDAY_PATH=/static/caturday
 CATURDAY=ON
 CATURDAY_DAY=Sunday
+
 PAST_OVERLAY_COLOR=#0000f1
 PAST_OVERLAY_OPACITY=0.32
-
 DISPLAY_DATE=today

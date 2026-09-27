@@ -12,11 +12,12 @@ ICS handling is recurrence-aware and includes support for:
  - RDATE additions
  - UID-based de-duplication
  - STATUS:CANCELLED filtering
- - optional all-day events via SHOW_ALL_DAY_EVENTS=true
+ - all-day events shown by default, spanning configured work hours
  - timezone selection via TIMEZONE=Europe/London
  - display date selection via DISPLAY_DATE=today or DISPLAY_DATE=YYYY-MM-DD
  - HTTP retries and in-memory ETag/Last-Modified caching
  - last-known-good events when a calendar fetch temporarily fails
+ - hour-label styling via HOUR_LABEL_* preferences
 """
 
 from flask import Flask, jsonify, render_template
@@ -44,11 +45,11 @@ except Exception:  # pragma: no cover - only used on very old requests installs
 # === Configuration ===
 CALENDAR_FILE = "calendars.txt"
 PREFERENCES_FILE = "preferences.txt"
-REFRESH_INTERVAL_SECONDS = 300  # 5 minutes
+DEFAULT_REFRESH_INTERVAL_SECONDS = 300  # 5 minutes
 DEFAULT_TZ = "Europe/London"
 HTTP_TIMEOUT_SECONDS = 20
-HTTP_USER_AGENT = "calendar-dashboard/3.0"
-APP_VERSION = "display-date-fixed-v2"
+HTTP_USER_AGENT = "calendar-dashboard/3.1"
+APP_VERSION = "logo-rotation-caturday-v1"
 
 # Defaults (used when preferences are missing / invalid)
 DEFAULT_WORK_START = 8
@@ -64,15 +65,26 @@ DEFAULT_EVENT_FONT_SIZE = 12
 DEFAULT_EVENT_FONT_FAMILY = "Arial, sans-serif"
 DEFAULT_EVENT_FONT_COLOR = "#000000"
 
+DEFAULT_HOUR_LABEL_FONT_SIZE = 12
+DEFAULT_HOUR_LABEL_FONT_FAMILY = "Arial, sans-serif"
+DEFAULT_HOUR_LABEL_COLOR = "#000000"
+
 DEFAULT_NOW_COLOR = "#e74c3c"
 DEFAULT_NOW_THICKNESS = 2
 
 DEFAULT_PAST_OVERLAY_COLOR = "#000000"
 DEFAULT_PAST_OVERLAY_OPACITY = 0.12
 
-# Keep original dashboard behaviour unless explicitly enabled.
-DEFAULT_SHOW_ALL_DAY_EVENTS = False
+# Show all-day room bookings by default. Set SHOW_ALL_DAY_EVENTS=false to hide them.
+DEFAULT_SHOW_ALL_DAY_EVENTS = True
 DEFAULT_DISPLAY_DATE = "today"
+
+DEFAULT_ROTATE_IMAGES = False
+DEFAULT_ROTATE_LOGO_TIME_MINUTES = 60
+DEFAULT_ROTATE_LOGO_ORDER = 'sequential'  # 'sequential' or 'random'
+DEFAULT_CATURDAY = False
+DEFAULT_CATURDAY_DAY = "Friday"
+DEFAULT_CATURDAY_PATH = "/static/caturday"
 
 # === App & cache globals ===
 # Ensure template_folder works when frozen by PyInstaller.
@@ -231,6 +243,27 @@ def get_event_prefs(prefs):
     return {"show_times": show_times, "font_size": size, "font_family": fam, "color": color}
 
 
+def get_hour_label_prefs(prefs):
+    """Return styling preferences for hour labels on the time axis.
+
+    Supported preferences:
+      HOUR_LABEL_COLOR=#000000
+      HOUR_LABEL_FONT_FAMILY=Arial, sans-serif
+      HOUR_LABEL_FONT_SIZE=12
+    """
+    color = prefs.get("HOUR_LABEL_COLOR", DEFAULT_HOUR_LABEL_COLOR)
+    fam = prefs.get("HOUR_LABEL_FONT_FAMILY", DEFAULT_HOUR_LABEL_FONT_FAMILY)
+    try:
+        size = int(prefs.get("HOUR_LABEL_FONT_SIZE", DEFAULT_HOUR_LABEL_FONT_SIZE))
+    except Exception:
+        size = DEFAULT_HOUR_LABEL_FONT_SIZE
+    if size < 6:
+        size = 6
+    if size > 72:
+        size = 72
+    return {"font_size": size, "font_family": fam, "color": color}
+
+
 def get_now_prefs(prefs):
     color = prefs.get("NOW_LINE_COLOR", DEFAULT_NOW_COLOR)
     try:
@@ -304,6 +337,173 @@ def get_display_date(prefs, target_tz):
         ).format(raw)
         return fallback, raw, warning
 
+
+
+def normalize_path_for_public_url(path_value):
+    """Convert a static file path to a public /static URL when possible."""
+    if not path_value:
+        return ""
+
+    raw = str(path_value).strip()
+    if not raw:
+        return ""
+
+    normalized = raw.replace('\\', '/')
+    if normalized.startswith('/static/'):
+        return normalized
+    if normalized.startswith('static/'):
+        return '/' + normalized
+    if os.path.isabs(normalized):
+        try:
+            rel = os.path.relpath(normalized, static_dir)
+            if not rel.startswith('..'):
+                return '/static/' + rel.replace(os.sep, '/')
+        except Exception:
+            pass
+    return normalized
+
+
+def resolve_logo_source(path_value):
+    """Return (filesystem_path, public_url) for a logo path preference."""
+    if not path_value:
+        return None, ""
+
+    raw = str(path_value).strip()
+    if not raw:
+        return None, ""
+
+    normalized = raw.replace('\\', '/')
+    if normalized.startswith('/static/'):
+        rel = normalized[len('/static/'):].lstrip('/')
+        fs_path = os.path.join(static_dir, rel.replace('/', os.sep))
+        return fs_path, normalized
+    if normalized.startswith('static/'):
+        rel = normalized[len('static/'):].lstrip('/')
+        fs_path = os.path.join(static_dir, rel.replace('/', os.sep))
+        return fs_path, '/' + normalized
+    if os.path.isabs(normalized):
+        return normalized, normalize_path_for_public_url(normalized)
+
+    fs_path = os.path.join(static_dir, normalized.replace('/', os.sep))
+    return fs_path, '/static/' + normalized.lstrip('/')
+
+
+def list_image_files(directory_path):
+    """Return deterministic list of image files inside a directory."""
+    if not directory_path or not os.path.isdir(directory_path):
+        return []
+    allowed_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'}
+    files = []
+    try:
+        for name in sorted(os.listdir(directory_path), key=lambda s: s.lower()):
+            full = os.path.join(directory_path, name)
+            if not os.path.isfile(full):
+                continue
+            _, ext = os.path.splitext(name)
+            if ext.lower() in allowed_exts:
+                files.append(full)
+    except Exception:
+        return []
+    return files
+
+
+def parse_weekday_name(raw_value, default_value=DEFAULT_CATURDAY_DAY):
+    mapping = {
+        'monday': 0,
+        'tuesday': 1,
+        'wednesday': 2,
+        'thursday': 3,
+        'friday': 4,
+        'saturday': 5,
+        'sunday': 6,
+    }
+    if raw_value is None:
+        raw_value = default_value
+    lowered = str(raw_value).strip().lower()
+    return mapping.get(lowered, mapping[str(default_value).strip().lower()])
+
+
+def choose_logo_asset(prefs, target_tz):
+    """Choose the logo image to display based on rotation and caturday rules."""
+    now = datetime.now(target_tz)
+    rotate_images = get_pref_bool(prefs, 'ROTATE_IMAGES', DEFAULT_ROTATE_IMAGES)
+    try:
+        rotate_minutes = int(prefs.get('ROTATE_LOGO_TIME_MINUTES', DEFAULT_ROTATE_LOGO_TIME_MINUTES))
+    except Exception:
+        rotate_minutes = DEFAULT_ROTATE_LOGO_TIME_MINUTES
+    if rotate_minutes < 1:
+        rotate_minutes = 1
+
+    caturday_enabled = get_pref_bool(prefs, 'CATURDAY', DEFAULT_CATURDAY)
+    caturday_path = prefs.get('CATURDAY_PATH', DEFAULT_CATURDAY_PATH)
+    caturday_day = parse_weekday_name(prefs.get('CATURDAY_DAY', DEFAULT_CATURDAY_DAY))
+    is_caturday = caturday_enabled and now.weekday() == caturday_day
+
+    source_key = 'logo'
+    source_path = prefs.get('LOGO_PATH', '')
+    if is_caturday:
+        source_key = 'caturday'
+        source_path = caturday_path or DEFAULT_CATURDAY_PATH
+
+    fs_path, public_path = resolve_logo_source(source_path)
+    if not fs_path:
+        return {
+            'logo_path': '',
+            'logo_source': source_key,
+            'logo_is_directory': False,
+            'logo_rotation_enabled': False,
+            'logo_rotation_minutes': rotate_minutes,
+            'logo_candidates': [],
+            'logo_selected_index': None,
+            'logo_selected_name': '',
+            'caturday_active': is_caturday,
+            'caturday_day': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][caturday_day],
+            'caturday_path': caturday_path,
+        }
+
+    logo_is_directory = os.path.isdir(fs_path)
+    selected_fs = fs_path
+    selected_public = public_path
+    candidates = []
+
+    rotate_order = str(prefs.get('ROTATE_LOGO_ORDER', DEFAULT_ROTATE_LOGO_ORDER)).strip().lower()
+    use_random = rotate_order == 'random'
+
+    if logo_is_directory:
+        candidates = list_image_files(fs_path)
+        if candidates:
+            if rotate_images:
+                if use_random:
+                    import random as _random
+                    index = _random.randrange(len(candidates))
+                else:
+                    bucket = int(now.timestamp() // (rotate_minutes * 60))
+                    index = bucket % len(candidates)
+            else:
+                index = 0
+            selected_fs = candidates[index]
+            selected_public = normalize_path_for_public_url(selected_fs)
+        else:
+            selected_fs = ''
+            selected_public = ''
+            index = None
+    else:
+        index = 0 if fs_path else None
+
+    return {
+        'logo_path': selected_public,
+        'logo_source': source_key,
+        'logo_is_directory': logo_is_directory,
+        'logo_rotation_enabled': rotate_images and logo_is_directory,
+        'logo_rotation_minutes': rotate_minutes,
+        'logo_rotation_order': rotate_order,
+        'logo_candidates': [normalize_path_for_public_url(p) for p in candidates],
+        'logo_selected_index': index,
+        'logo_selected_name': os.path.basename(selected_fs) if selected_fs else '',
+        'caturday_active': is_caturday,
+        'caturday_day': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][caturday_day],
+        'caturday_path': caturday_path,
+    }
 
 
 # === HTTP fetching ===
@@ -475,7 +675,12 @@ def normalize_occurrence_key(dt_value, target_tz, all_day=False):
 
 
 def get_end_datetime(comp, start_value, target_tz):
-    """Return the event end as a timezone-aware datetime, or None."""
+    """Return the event end as a timezone-aware datetime, or None.
+
+    RFC 5545 treats DTEND on all-day VALUE=DATE events as exclusive. If an
+    all-day event omits DTEND and DURATION, treat it as a one-day event rather
+    than a zero-length event so it can still overlap and display on its date.
+    """
     start_dt = to_datetime(start_value, target_tz)
     if start_dt is None:
         return None
@@ -491,6 +696,9 @@ def get_end_datetime(comp, start_value, target_tz):
         dur = get_raw_value(duration_value)
         if isinstance(dur, timedelta):
             return start_dt + dur
+
+    if is_date_only(start_value):
+        return start_dt + timedelta(days=1)
 
     return start_dt
 
@@ -509,14 +717,32 @@ def event_overlaps_datetimes(start_dt, end_dt, target_date, target_tz):
 
 def event_overlaps_date(start_value, end_value, target_date, target_tz):
     start_dt = to_datetime(start_value, target_tz)
-    end_dt = to_datetime(end_value, target_tz) if end_value is not None else start_dt
+    if end_value is not None:
+        end_dt = to_datetime(end_value, target_tz)
+    elif is_date_only(start_value):
+        end_dt = start_dt + timedelta(days=1) if start_dt is not None else None
+    else:
+        end_dt = start_dt
     return event_overlaps_datetimes(start_dt, end_dt, target_date, target_tz)
 
 
-def format_span(start_dt, end_dt, target_date, target_tz, all_day=False):
-    """Format the visible portion of an event on the target date."""
+def format_span(
+    start_dt,
+    end_dt,
+    target_date,
+    target_tz,
+    all_day=False,
+    all_day_start_hour=DEFAULT_WORK_START,
+    all_day_end_hour=DEFAULT_WORK_END,
+):
+    """Format the visible portion of an event on the target date.
+
+    The existing dashboard front end expects concrete HH:MM start/end values.
+    For all-day events, return the configured workday span so the graphical
+    view has a visible block, while preserving true ISO start/end separately.
+    """
     if all_day:
-        return "", ""
+        return f"{int(all_day_start_hour):02d}:00", f"{int(all_day_end_hour):02d}:00"
 
     day_start = datetime.combine(target_date, datetime_time.min).replace(tzinfo=target_tz)
     day_end = day_start + timedelta(days=1)
@@ -701,14 +927,34 @@ def coerce_target_date(target_date, target_tz):
     return dtparser.parse(str(target_date)).date()
 
 
-def make_event_dict(comp, summary, start_dt, end_dt, target_date, target_tz, all_day, recurrence_key):
-    start_str, end_str = format_span(start_dt, end_dt, target_date, target_tz, all_day=all_day)
+def make_event_dict(
+    comp,
+    summary,
+    start_dt,
+    end_dt,
+    target_date,
+    target_tz,
+    all_day,
+    recurrence_key,
+    all_day_start_hour=DEFAULT_WORK_START,
+    all_day_end_hour=DEFAULT_WORK_END,
+):
+    start_str, end_str = format_span(
+        start_dt,
+        end_dt,
+        target_date,
+        target_tz,
+        all_day=all_day,
+        all_day_start_hour=all_day_start_hour,
+        all_day_end_hour=all_day_end_hour,
+    )
     uid = component_uid(comp)
     return {
         "title": summary,
         "start": start_str,
         "end": end_str,
         "all_day": bool(all_day),
+        "display_as_all_day": bool(all_day),
         "uid": uid,
         "start_iso": start_dt.isoformat() if start_dt else "",
         "end_iso": end_dt.isoformat() if end_dt else "",
@@ -717,7 +963,14 @@ def make_event_dict(comp, summary, start_dt, end_dt, target_date, target_tz, all
     }
 
 
-def read_ics_events_for_date(ics_url, target_date, tz_name=DEFAULT_TZ, show_all_day_events=DEFAULT_SHOW_ALL_DAY_EVENTS):
+def read_ics_events_for_date(
+    ics_url,
+    target_date,
+    tz_name=DEFAULT_TZ,
+    show_all_day_events=DEFAULT_SHOW_ALL_DAY_EVENTS,
+    all_day_start_hour=DEFAULT_WORK_START,
+    all_day_end_hour=DEFAULT_WORK_END,
+):
     """
     Fetch the ICS file and return a list of event dicts.
 
@@ -749,7 +1002,20 @@ def read_ics_events_for_date(ics_url, target_date, tz_name=DEFAULT_TZ, show_all_
         if dedupe_key in seen:
             return
         seen.add(dedupe_key)
-        events.append(make_event_dict(comp, summary, start_dt, end_dt, target_date, target_tz, all_day, recurrence_key))
+        events.append(
+            make_event_dict(
+                comp,
+                summary,
+                start_dt,
+                end_dt,
+                target_date,
+                target_tz,
+                all_day,
+                recurrence_key,
+                all_day_start_hour=all_day_start_hour,
+                all_day_end_hour=all_day_end_hour,
+            )
+        )
 
     for comp in components:
         if is_cancelled(comp):
@@ -797,7 +1063,7 @@ def read_ics_events_for_date(ics_url, target_date, tz_name=DEFAULT_TZ, show_all_
 
     events.sort(
         key=lambda ev: (
-            1 if not ev.get("start") else 0,
+            0 if ev.get("all_day") else 1,
             datetime.strptime(ev["start"], "%H:%M").time() if ev.get("start") else datetime_time.min,
             ev.get("title", "").lower(),
         )
@@ -821,10 +1087,11 @@ def build_snapshot_for_display_date():
     fit_to_window = get_pref_bool(prefs, "FIT_TO_WINDOW", DEFAULT_FIT_TO_WINDOW)
     header = get_header_prefs(prefs)
     event_prefs = get_event_prefs(prefs)
+    hour_label_prefs = get_hour_label_prefs(prefs)
     now_prefs = get_now_prefs(prefs)
     past_overlay = get_past_overlay_prefs(prefs)
     calendar_colors = get_calendar_colors(prefs)
-    logo_path = prefs.get("LOGO_PATH", "")
+    logo_info = choose_logo_asset(prefs, target_tz)
 
     snapshot = {
         "work_start_hour": work_start,
@@ -832,9 +1099,20 @@ def build_snapshot_for_display_date():
         "fit_to_window": fit_to_window,
         "header": header,
         "event_prefs": event_prefs,
+        "hour_label_prefs": hour_label_prefs,
         "now_prefs": now_prefs,
         "past_overlay": past_overlay,
-        "logo_path": logo_path,
+        "logo_path": logo_info["logo_path"],
+        "logo_source": logo_info["logo_source"],
+        "logo_is_directory": logo_info["logo_is_directory"],
+        "logo_rotation_enabled": logo_info["logo_rotation_enabled"],
+        "logo_rotation_minutes": logo_info["logo_rotation_minutes"],
+        "logo_candidates": logo_info["logo_candidates"],
+        "logo_selected_index": logo_info["logo_selected_index"],
+        "logo_selected_name": logo_info["logo_selected_name"],
+        "caturday_active": logo_info["caturday_active"],
+        "caturday_day": logo_info["caturday_day"],
+        "caturday_path": logo_info["caturday_path"],
         "calendar_colors": calendar_colors,
         "date": display_date.strftime("%Y-%m-%d"),
         "display_date": display_date.strftime("%Y-%m-%d"),
@@ -844,6 +1122,7 @@ def build_snapshot_for_display_date():
         "is_today": display_date == actual_today,
         "timezone": tz_name,
         "show_all_day_events": show_all_day_events,
+        "refresh_interval_seconds": get_refresh_interval_seconds(),
         "app_version": APP_VERSION,
         "config_paths": {
             "calendars_file": resolve_config_path(CALENDAR_FILE),
@@ -866,6 +1145,8 @@ def build_snapshot_for_display_date():
                 display_date,
                 tz_name=tz_name,
                 show_all_day_events=show_all_day_events,
+                all_day_start_hour=work_start,
+                all_day_end_hour=work_end,
             )
             calendar_entry["events"] = events
             calendar_entry["status"] = "ok"
@@ -919,13 +1200,27 @@ def refresh_all_calendars():
         traceback.print_exc()
 
 
+def get_refresh_interval_seconds():
+    """Read REFRESH_INTERVAL_MINUTES from preferences, falling back to the default."""
+    try:
+        prefs = read_preferences_file()
+        minutes = int(prefs.get("REFRESH_INTERVAL_MINUTES", DEFAULT_REFRESH_INTERVAL_SECONDS // 60))
+        seconds = minutes * 60
+        if seconds < 60:
+            seconds = 60
+        return seconds
+    except Exception:
+        return DEFAULT_REFRESH_INTERVAL_SECONDS
+
+
 def refresh_loop():
     try:
         refresh_all_calendars()
     except Exception:
         pass
     while True:
-        time.sleep(REFRESH_INTERVAL_SECONDS)
+        interval = get_refresh_interval_seconds()
+        time.sleep(interval)
         try:
             refresh_all_calendars()
         except Exception:
@@ -936,7 +1231,7 @@ def refresh_loop():
 def start_background_refresher():
     t = threading.Thread(target=refresh_loop, name="calendar-refresher", daemon=True)
     t.start()
-    print("[app.py] Background refresher started (interval {}s).".format(REFRESH_INTERVAL_SECONDS))
+    print("[app.py] Background refresher started (interval {}s, configurable via REFRESH_INTERVAL_MINUTES).".format(get_refresh_interval_seconds()))
     print("[app.py] Version: {}".format(APP_VERSION))
     print("[app.py] Config dir: {}".format(CONFIG_DIR))
     print("[app.py] Preferences file: {}".format(resolve_config_path(PREFERENCES_FILE)))
@@ -982,6 +1277,33 @@ def api_events():
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             return response, 500
+    # Logo selection is a cheap in-memory calculation, but it depends on the
+    # current time (rotation bucket).  Baking it into the cached snapshot means
+    # it only updates when the ICS feeds are re-fetched, not on every poll.
+    # Recompute it here so the browser always gets the correct image for *now*.
+    try:
+        prefs = read_preferences_file()
+        tz_name = prefs.get("TIMEZONE", DEFAULT_TZ)
+        target_tz = get_target_timezone(tz_name)
+        fresh_logo = choose_logo_asset(prefs, target_tz)
+        # shallow-copy the snapshot so we don't mutate the shared cache
+        snap = dict(snap)
+        snap.update({
+            "logo_path": fresh_logo["logo_path"],
+            "logo_source": fresh_logo["logo_source"],
+            "logo_is_directory": fresh_logo["logo_is_directory"],
+            "logo_rotation_enabled": fresh_logo["logo_rotation_enabled"],
+            "logo_rotation_minutes": fresh_logo["logo_rotation_minutes"],
+            "logo_rotation_order": fresh_logo["logo_rotation_order"],
+            "logo_candidates": fresh_logo["logo_candidates"],
+            "logo_selected_index": fresh_logo["logo_selected_index"],
+            "logo_selected_name": fresh_logo["logo_selected_name"],
+            "caturday_active": fresh_logo["caturday_active"],
+            "caturday_day": fresh_logo["caturday_day"],
+        })
+    except Exception as ex:
+        print("[app.py] Warning: could not recompute logo for response:", ex)
+
     response = jsonify(snap)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
