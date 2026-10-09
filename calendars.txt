@@ -3,5 +3,5 @@ Seminar 1B | https://outlook.office365.com/owa/calendar/47da56e15df54524a8b64911
 Seminar 2A | https://outlook.office365.com/owa/calendar/0eff1c07600049329282f58715872dd7@dtc.ox.ac.uk/d75445e4e5d54fcdbeaa08470066a3e310145767572638596134/calendar.ics |upstairs.png
 Seminar 2B | https://outlook.office365.com/owa/calendar/1750acb2e74d4b1fbab75912c4df3b1f@dtc.ox.ac.uk/5b212e3e387240a889b07e30b37acc2f17187741989343963481/calendar.ics |upstairs.png
 Meeting Room 1 | https://outlook.office365.com/owa/calendar/033a6fbed23445f883569691d15c0328@dtc.ox.ac.uk/9854dabb68cd4b788bc591b801f4bd347088892579858233075/calendar.ics | downstairs.png
-Meeting Room 2 | https://outlook.office365.com/owa/calendar/f3b0161ba7784f109919d44614f3d483@dtc.ox.ac.uk/522ef8de69bb4a91945b43807cc5adc58032041894292084996/calendar.ics 
+Meeting Room 2 | https://outlook.office365.com/owa/calendar/f3b0161ba7784f109919d44614f3d483@dtc.ox.ac.uk/522ef8de69bb4a91945b43807cc5adc58032041894292084996/calendar.ics | goaround.png
 
