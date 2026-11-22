@@ -36,7 +36,8 @@
 
   .row { display:flex; flex:1 0 auto; min-height:68px; border-bottom:1px solid #e8e8e8; align-items:stretch; position:relative; z-index:2; }
   .label { width:160px; padding-left:10px; display:flex; align-items:center; font-weight:600; border-right:1px solid #eee; background: rgba(251,251,251,0.9); z-index:3; }
-  .timeline { flex:1; position:relative; background:transparent; overflow:visible; z-index:2; }
+  /* Keep timeline labels above the room-name column without shifting their positions. */
+  .timeline { flex:1; position:relative; background:transparent; overflow:visible; z-index:4; }
   .iconcell { width:84px; min-width:84px; padding:6px; border-left:1px solid #eee; display:flex; align-items:center; justify-content:center; background: rgba(251,251,251,0.9); z-index:3; }
   .iconcell img { max-width:64px; max-height:56px; object-fit:contain; display:block; }
 
@@ -195,6 +196,7 @@ function setLogo(path) {
 let fitToWindow = true;
 let serverDate = new Date();
 let eventPrefs = { show_times:false, font_size:12, font_family:'Arial, sans-serif', color:'#000' };
+let hourLabelPrefs = { font_size:12, font_family:'Arial, sans-serif', color:'#000000' };
 let nowPrefs = { color:'#e74c3c', thickness:2 };
 let pastOverlayPrefs = { color:'#000000', opacity:0.12 };
 let calendarBaseColors = [];
@@ -301,6 +303,11 @@ function applyPrefsFromObject(obj) {
       eventPrefs.font_size = Number(obj.event_prefs.font_size) || 12;
       eventPrefs.font_family = obj.event_prefs.font_family || 'Arial, sans-serif';
       eventPrefs.color = obj.event_prefs.color || '#000';
+    }
+    if (obj.hour_label_prefs) {
+      hourLabelPrefs.font_size = Number(obj.hour_label_prefs.font_size) || hourLabelPrefs.font_size;
+      hourLabelPrefs.font_family = obj.hour_label_prefs.font_family || hourLabelPrefs.font_family;
+      hourLabelPrefs.color = obj.hour_label_prefs.color || hourLabelPrefs.color;
     }
     if (obj.now_prefs) {
       nowPrefs.color = obj.now_prefs.color || nowPrefs.color;
@@ -424,6 +431,9 @@ function render() {
         timeline.appendChild(line);
         if (i < hours) {
           const hl = document.createElement('div'); hl.className='hour-label'; hl.style.left = pos + '%';
+          hl.style.fontSize = hourLabelPrefs.font_size + 'px';
+          hl.style.fontFamily = hourLabelPrefs.font_family;
+          hl.style.color = hourLabelPrefs.color;
           hl.textContent = String(hour).padStart(2,'0') + ':00'; timeline.appendChild(hl);
         }
       }
