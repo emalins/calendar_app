@@ -274,5 +274,4 @@ By default the app reads `calendars.txt` and `preferences.txt` from its own fold
 
 ## Known limitations
 
-- The `HOUR_LABEL_COLOR`, `HOUR_LABEL_FONT_FAMILY` and `HOUR_LABEL_FONT_SIZE` settings are read by the server but are not yet applied by the bundled page, so the hour labels currently keep a fixed style.
 - There is no login.  Anyone who can reach the page can see it, so only show calendars you are happy to display publicly and note that `/api/events` includes the feed URLs.
