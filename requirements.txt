@@ -1,0 +1,8 @@
+# Calendar Dashboard dependencies
+flask>=3.1
+requests>=2.32
+icalendar>=6.0
+python-dateutil>=2.9
+
+# Production WSGI server (pure Python, runs on Linux, macOS and Windows)
+waitress>=3.0
