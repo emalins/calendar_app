@@ -34,6 +34,7 @@ import traceback
 import requests
 from dateutil import parser as dtparser, tz
 from dateutil.rrule import rruleset, rrulestr
+from waitress import serve
 
 try:
     from requests.adapters import HTTPAdapter
@@ -1396,4 +1397,12 @@ def api_events():
 
 if __name__ == "__main__":
     start_background_refresher()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    # Waitress is a production-quality WSGI server that runs on Linux, macOS and
+    # Windows. Keep to a single process: the calendar cache and refresher thread
+    # live in memory. Threads handle concurrent requests.
+    # Listen on this machine only by default. Set CALENDAR_DASHBOARD_HOST=0.0.0.0
+    # to allow other devices on the network to view the dashboard.
+    host = os.environ.get("CALENDAR_DASHBOARD_HOST", "127.0.0.1")
+    port = int(os.environ.get("CALENDAR_DASHBOARD_PORT", "5000"))
+    print("[app.py] Serving on http://{}:{} (Waitress)".format(host, port))
+    serve(app, host=host, port=port, threads=4)
