@@ -17,6 +17,12 @@ EVENT_FONT_SIZE=18
 EVENT_FONT_FAMILY=Arial, sans-serif
 EVENT_FONT_COLOR=#000000
 
+#Shrink event text so that words aren't split across lines: individual, row, everything or off
+SHRINK_TO_FIT=individual
+
+#Smallest size (pixels) that event text may shrink to
+EVENT_MIN_FONT_SIZE=11
+
 #How often to look for new calendar events
 REFRESH_INTERVAL_MINUTES=5
 
@@ -42,6 +48,12 @@ ROTATE_LOGO_TIME_MINUTES=5
 
 #Alternative is ROTATE_LOGO_ORDER=SEQUENTIAL
 ROTATE_LOGO_ORDER=RANDOM
+
+#How strong the background logo is: 1 = full strength, 0 = invisible. Try 0.1 to 0.2 for a watermark
+LOGO_OPACITY=0.15
+
+#Same idea for the Caturday pet pictures (1 = full strength)
+CATURDAY_OPACITY=1
 
 #Important settings regarding pet pictures
 CATURDAY_PATH=/static/caturday
