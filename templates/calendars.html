@@ -161,9 +161,14 @@ const logoLayerB = document.getElementById('logoLayerB');
 let logoActiveLayer = logoLayerA;   // currently visible layer
 let logoInactiveLayer = logoLayerB; // layer fading in next
 let currentLogoPath = '';
+let logoOpacity = 1;                // 1 = full strength, lower = fainter watermark (LOGO_OPACITY)
 
 function setLogo(path) {
-  if (path === currentLogoPath) return; // no change, nothing to do
+  if (path === currentLogoPath) {
+    // same image: just make sure the visible layer has the current opacity setting
+    if (path) logoActiveLayer.style.opacity = String(logoOpacity);
+    return;
+  }
   currentLogoPath = path;
   if (!path) {
     // clear both layers
@@ -177,7 +182,7 @@ function setLogo(path) {
   const img = new Image();
   img.onload = function() {
     logoInactiveLayer.style.backgroundImage = `url("${path}")`;
-    logoInactiveLayer.style.opacity = '1';
+    logoInactiveLayer.style.opacity = String(logoOpacity);
     logoActiveLayer.style.opacity = '0';
     // swap references
     const tmp = logoActiveLayer;
@@ -195,7 +200,8 @@ function setLogo(path) {
 }
 let fitToWindow = true;
 let serverDate = new Date();
-let eventPrefs = { show_times:false, font_size:12, font_family:'Arial, sans-serif', color:'#000' };
+let eventPrefs = { show_times:false, font_size:12, font_family:'Arial, sans-serif', color:'#000',
+                   shrink_to_fit:'individual', min_font_size:11 };
 let hourLabelPrefs = { font_size:12, font_family:'Arial, sans-serif', color:'#000000' };
 let nowPrefs = { color:'#e74c3c', thickness:2 };
 let pastOverlayPrefs = { color:'#000000', opacity:0.12 };
@@ -233,10 +239,25 @@ function shadeHsl(hex, deltaL){
 }
 
 /* text measuring for wrapping */
-const measureCanvas = document.createElement('canvas');
-const measureCtx = measureCanvas.getContext('2d');
-function setMeasureFont(size,family){ measureCtx.font = `${size}px ${family}`; }
-function measureTextWidth(text){ return measureCtx.measureText(text).width; }
+/* Text is measured with a hidden element rather than a canvas, so the widths are exactly
+   what the browser will use when it lays the event titles out.  Results are cached. */
+const measureProbe = document.createElement('span');
+measureProbe.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;white-space:pre;';
+document.body.appendChild(measureProbe);
+const measureCache = new Map();
+let measureFont = '12px Arial, sans-serif';
+function setMeasureFont(size,family){ measureFont = `${size}px ${family}`; }
+function measureTextWidth(text){
+  const key = measureFont + '|' + text;
+  let w = measureCache.get(key);
+  if (w === undefined) {
+    measureProbe.style.font = measureFont;
+    measureProbe.textContent = text;
+    w = measureProbe.getBoundingClientRect().width;
+    measureCache.set(key, w);
+  }
+  return w;
+}
 function wrapTextToLines(text, maxWidthPx, size, family) {
   if(!text) return [''];
   setMeasureFont(size,family);
@@ -274,6 +295,88 @@ function truncateToWidthWithEllipsis(text, maxWidthPx, size, family) {
   return text.slice(0,lo) + ell;
 }
 
+/* Shrink-to-fit: choose the font size for each event title so words are not split.
+   SHRINK_TO_FIT modes (eventPrefs.shrink_to_fit):
+     individual - every event box uses the largest size at which its own title fits
+     row        - all events in a room's row share the smallest size any of them needs
+     everything - every event on the display shares the smallest size any of them needs
+     off        - no shrinking: always the configured size (long words are split)
+   Sizes never go below EVENT_MIN_FONT_SIZE.  A title that cannot fit even at the minimum
+   size is drawn at the minimum size and, as a last resort, split or cut with an ellipsis.
+   Such titles are ignored when working out the shared size, so one hopeless box does not
+   shrink everything else. */
+const FIT_SAFETY_PX = 0.5;   // width kept spare when checking that a word fits
+
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function textFitsAtSize(text, size, family, availW, availH) {
+  setMeasureFont(size, family);
+  // every single word must fit on a line by itself
+  if (!text.split(/\s+/).every(w => measureTextWidth(w) <= availW)) return false;
+  // and the wrapped lines must fit the box height (line-height is fixed at 1.2)
+  const lines = wrapTextToLines(text, availW, size, family);
+  return lines.length * size * 1.2 <= availH;
+}
+
+function bestFitSize(text, family, availW, availH, maxSize, minSize) {
+  for (let s = maxSize; s >= minSize; s--) {
+    if (textFitsAtSize(text, s, family, availW, availH)) return { size: s, fits: true };
+  }
+  return { size: minSize, fits: false };
+}
+
+function fitEventText(boxes) {
+  const family = eventPrefs.font_family || 'Arial, sans-serif';
+  const maxSize = Number(eventPrefs.font_size) || 12;
+  const minSize = Math.min(maxSize, Math.max(6, Number(eventPrefs.min_font_size) || 11));
+  const mode = String(eventPrefs.shrink_to_fit || 'individual').toLowerCase();
+
+  // 1. Measure every box and find the largest size at which its own title fits.
+  boxes.forEach(b => {
+    const style = getComputedStyle(b.div);
+    const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    // Use the exact (fractional) box size, not the rounded clientWidth, and keep a tiny
+    // safety margin so a word that is a hair too wide is not split by the browser.
+    const rect = b.div.getBoundingClientRect();
+    b.availW = Math.max(10, rect.width - padX - FIT_SAFETY_PX);
+    b.availH = Math.max(6, rect.height - padY);
+    b.fit = (mode === 'off')
+      ? { size: maxSize, fits: true }
+      : bestFitSize(b.label, family, b.availW, b.availH, maxSize, minSize);
+  });
+
+  // 2. Work out the size each box will actually use.
+  const smallest = list => list.filter(b => b.fit.fits).reduce((m, b) => Math.min(m, b.fit.size), maxSize);
+  const everythingSize = smallest(boxes);
+  const rowSize = {};
+  boxes.forEach(b => { (rowSize[b.calIdx] = rowSize[b.calIdx] || []).push(b); });
+  Object.keys(rowSize).forEach(k => { rowSize[k] = smallest(rowSize[k]); });
+
+  boxes.forEach(b => {
+    if (!b.fit.fits) b.size = minSize;
+    else if (mode === 'everything') b.size = everythingSize;
+    else if (mode === 'row') b.size = rowSize[b.calIdx];
+    else b.size = b.fit.size;   // 'individual' (and 'off', where fit.size is the configured size)
+  });
+
+  // 3. Draw the text.  If it still does not fit, split long words / cut with an ellipsis.
+  boxes.forEach(b => {
+    try {
+      b.div.style.fontSize = b.size + 'px';
+      b.div.style.lineHeight = '1.2';
+      const maxLines = Math.max(1, Math.floor(b.availH / (b.size * 1.2)));
+      let lines = wrapTextToLines(b.label, b.availW, b.size, family);
+      if (lines.length > maxLines) {
+        const keep = lines.slice(0, maxLines);
+        keep[keep.length - 1] = truncateToWidthWithEllipsis(keep[keep.length - 1], b.availW, b.size, family);
+        lines = keep;
+      }
+      b.div.innerHTML = lines.map(escHtml).join('<br>');
+    } catch (inner) { console.error('wrap/render inner error', inner); }
+  });
+}
+
 function buildEventLabel(ev) {
   let label = (ev.title||'').trim();
   if (eventPrefs.show_times && ev.start) {
@@ -303,6 +406,8 @@ function applyPrefsFromObject(obj) {
       eventPrefs.font_size = Number(obj.event_prefs.font_size) || 12;
       eventPrefs.font_family = obj.event_prefs.font_family || 'Arial, sans-serif';
       eventPrefs.color = obj.event_prefs.color || '#000';
+      eventPrefs.shrink_to_fit = obj.event_prefs.shrink_to_fit || 'individual';
+      eventPrefs.min_font_size = Number(obj.event_prefs.min_font_size) || 11;
     }
     if (obj.hour_label_prefs) {
       hourLabelPrefs.font_size = Number(obj.hour_label_prefs.font_size) || hourLabelPrefs.font_size;
@@ -318,6 +423,10 @@ function applyPrefsFromObject(obj) {
       pastOverlayPrefs.opacity = Number(obj.past_overlay.opacity) || pastOverlayPrefs.opacity;
     }
     calendarBaseColors = Array.isArray(obj.calendar_colors) ? obj.calendar_colors.slice() : [];
+    // Not "|| default": 0 is a valid opacity (logo hidden).
+    if (obj.logo_opacity !== undefined && Number.isFinite(Number(obj.logo_opacity))) {
+      logoOpacity = Math.min(1, Math.max(0, Number(obj.logo_opacity)));
+    }
     // logo_path handled in fetchData
   } catch (ex) {
     console.error('applyPrefsFromObject error', ex);
@@ -404,6 +513,9 @@ function render() {
 
     const startMin = workStart*60, endMin = workEnd*60, totalRange = Math.max(1, endMin - startMin);
     const hours = workEnd - workStart;
+
+    // Event boxes collected while building rows, for SHRINK_TO_FIT
+    const eventBoxes = [];
 
     // Build rows
     currentData.forEach((cal, calIdx) => {
@@ -523,34 +635,14 @@ function render() {
           div.style.zIndex = 20 + (colIndex || 0);
           timeline.appendChild(div);
 
-          requestAnimationFrame(() => {
-            try {
-              const style = getComputedStyle(div);
-              const padL = parseFloat(style.paddingLeft) || 0;
-              const padR = parseFloat(style.paddingRight) || 0;
-              const availableWidth = Math.max(10, div.clientWidth - padL - padR);
-              const boxHeight = Math.max(6, div.clientHeight);
-              let lh;
-              if (style.lineHeight && style.lineHeight !== 'normal') {
-                if (style.lineHeight.endsWith('px')) lh = parseFloat(style.lineHeight);
-                else lh = (eventPrefs.font_size || 12) * 1.2;
-              } else lh = (eventPrefs.font_size || 12) * 1.2;
-              const maxLines = Math.max(1, Math.floor(boxHeight / lh));
-              const labelText = buildEventLabel(ev._orig);
-              const rawLines = wrapTextToLines(labelText, availableWidth, eventPrefs.font_size, eventPrefs.font_family);
-              let lines = rawLines;
-              if (lines.length > maxLines) {
-                const keep = lines.slice(0, maxLines);
-                keep[keep.length - 1] = truncateToWidthWithEllipsis(keep[keep.length - 1], availableWidth, eventPrefs.font_size, eventPrefs.font_family);
-                lines = keep;
-              }
-              function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-              div.innerHTML = lines.map(esc).join('<br>');
-            } catch(inner){ console.error('wrap/render inner error', inner); }
-          });
+          // Text is sized once every box exists (see fitEventText below).
+          eventBoxes.push({ div: div, label: buildEventLabel(ev._orig), calIdx: calIdx });
         });
       }
     });
+
+    // Size all event titles together, after layout, so SHRINK_TO_FIT can compare boxes.
+    requestAnimationFrame(() => fitEventText(eventBoxes));
 
     // overlays persist; update positions
     updateNowLine();
