@@ -1,0 +1,6 @@
+git clone https://github.com/emalins/calendar_app.git
+cd calendar_app
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
