@@ -72,6 +72,7 @@ Windows (PowerShell):
 ```powershell
 winget install --id Git.Git -e --source winget
 winget install --id Python.Python.3.13 -e --source winget
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 git clone https://github.com/emalins/calendar_app.git
 cd calendar_app
