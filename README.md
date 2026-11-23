@@ -70,6 +70,9 @@ python app.py
 Windows (PowerShell):
 
 ```powershell
+winget install --id Git.Git -e --source winget
+winget install --id Python.Python.3.13 -e --source winget
+
 git clone https://github.com/emalins/calendar_app.git
 cd calendar_app
 py -m venv .venv
@@ -77,6 +80,10 @@ py -m venv .venv
 pip install -r requirements.txt
 python app.py
 ```
+
+You don't have to use pythhon v3.13, however the generic installer instructions on [docs.python.org](https://docs.python.org/3.14/using/windows.htm) use an inscruitable ID of (winget install 9NQ7512CXL7T -e --accept-package-agreements --disable-interactivity)
+
+
 
 A virtual environment (`.venv`) keeps the app's packages separate from the system Python.  Modern Debian, Ubuntu and Raspberry Pi OS require this, and `pip install` into the system Python fails there with `error: externally-managed-environment`.  If `python3 -m venv` itself fails on those systems, install the module first with `sudo apt install python3-venv`.
 

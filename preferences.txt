@@ -17,7 +17,7 @@ EVENT_FONT_SIZE=18
 EVENT_FONT_FAMILY=Arial, sans-serif
 EVENT_FONT_COLOR=#000000
 
-#Shrink event text so that words aren't split across lines: individual, row, everything or off
+#Shrink event text so that words aren't split across lines (options : individual, row, everything, off)
 SHRINK_TO_FIT=individual
 
 #Smallest size (pixels) that event text may shrink to
@@ -26,9 +26,10 @@ EVENT_MIN_FONT_SIZE=11
 #How often to look for new calendar events
 REFRESH_INTERVAL_MINUTES=5
 
-# Calendar colours (optional, comma-separated hex). Example:
+# Calendar colours (optional, comma-separated hex). Example for three calendars:
 # CALENDAR_COLORS=#2ecc71,#3498db,#9b59b6
-CALENDAR_COLORS=#2ecc71,#3498db,#f39c12
+#CALENDAR_COLORS=#2ecc71,#3498db,#f39c12
+CALENDAR_COLORS=#2ecc71,#3498db,#f39c12,#ab69c6,#f74d4c,#1abc9c
 
 # Now-line style
 NOW_LINE_COLOR=#e74c3c
