@@ -66,6 +66,11 @@ DEFAULT_EVENT_FONT_SIZE = 12
 DEFAULT_EVENT_FONT_FAMILY = "Arial, sans-serif"
 DEFAULT_EVENT_FONT_COLOR = "#000000"
 
+# Shrink event titles so words are not split.  See SHRINK_TO_FIT_MODES.
+DEFAULT_SHRINK_TO_FIT = "individual"
+SHRINK_TO_FIT_MODES = ("individual", "row", "everything", "off")
+DEFAULT_EVENT_MIN_FONT_SIZE = 11
+
 DEFAULT_HOUR_LABEL_FONT_SIZE = 12
 DEFAULT_HOUR_LABEL_FONT_FAMILY = "Arial, sans-serif"
 DEFAULT_HOUR_LABEL_COLOR = "#000000"
@@ -75,6 +80,9 @@ DEFAULT_NOW_THICKNESS = 2
 
 DEFAULT_PAST_OVERLAY_COLOR = "#000000"
 DEFAULT_PAST_OVERLAY_OPACITY = 0.12
+
+# Strength of the background logo/image: 1 = full strength, lower = fainter watermark.
+DEFAULT_LOGO_OPACITY = 1.0
 
 # Show all-day room bookings by default. Set SHOW_ALL_DAY_EVENTS=false to hide them.
 DEFAULT_SHOW_ALL_DAY_EVENTS = True
@@ -242,7 +250,27 @@ def get_event_prefs(prefs):
         size = DEFAULT_EVENT_FONT_SIZE
     fam = prefs.get("EVENT_FONT_FAMILY", DEFAULT_EVENT_FONT_FAMILY)
     color = prefs.get("EVENT_FONT_COLOR", DEFAULT_EVENT_FONT_COLOR)
-    return {"show_times": show_times, "font_size": size, "font_family": fam, "color": color}
+
+    # SHRINK_TO_FIT: individual | row | everything | off (invalid values use the default)
+    shrink = str(prefs.get("SHRINK_TO_FIT", DEFAULT_SHRINK_TO_FIT)).strip().lower()
+    if shrink not in SHRINK_TO_FIT_MODES:
+        shrink = DEFAULT_SHRINK_TO_FIT
+
+    # Smallest size titles may shrink to; never above the normal event font size.
+    try:
+        min_size = int(prefs.get("EVENT_MIN_FONT_SIZE", DEFAULT_EVENT_MIN_FONT_SIZE))
+    except Exception:
+        min_size = DEFAULT_EVENT_MIN_FONT_SIZE
+    min_size = max(6, min(min_size, size))
+
+    return {
+        "show_times": show_times,
+        "font_size": size,
+        "font_family": fam,
+        "color": color,
+        "shrink_to_fit": shrink,
+        "min_font_size": min_size,
+    }
 
 
 def get_hour_label_prefs(prefs):
@@ -286,6 +314,21 @@ def get_past_overlay_prefs(prefs):
     if opacity > 1:
         opacity = 1.0
     return {"color": color, "opacity": opacity}
+
+
+def get_logo_opacity(prefs, caturday_active=False):
+    """Return the background image opacity (0 = invisible, 1 = full strength).
+
+    LOGO_OPACITY applies to the normal background logo/images.  On Caturday the
+    pet pictures use CATURDAY_OPACITY instead, so a faint logo watermark does not
+    also fade the cat photos.
+    """
+    key = "CATURDAY_OPACITY" if caturday_active else "LOGO_OPACITY"
+    try:
+        opacity = float(prefs.get(key, DEFAULT_LOGO_OPACITY))
+    except Exception:
+        return DEFAULT_LOGO_OPACITY
+    return min(1.0, max(0.0, opacity))
 
 
 def get_calendar_colors(prefs):
@@ -1104,6 +1147,7 @@ def build_snapshot_for_display_date():
         "hour_label_prefs": hour_label_prefs,
         "now_prefs": now_prefs,
         "past_overlay": past_overlay,
+        "logo_opacity": get_logo_opacity(prefs, logo_info["caturday_active"]),
         "logo_path": logo_info["logo_path"],
         "logo_source": logo_info["logo_source"],
         "logo_is_directory": logo_info["logo_is_directory"],
@@ -1385,6 +1429,7 @@ def api_events():
             "logo_selected_name": fresh_logo["logo_selected_name"],
             "caturday_active": fresh_logo["caturday_active"],
             "caturday_day": fresh_logo["caturday_day"],
+            "logo_opacity": get_logo_opacity(prefs, fresh_logo["caturday_active"]),
         })
     except Exception as ex:
         print("[app.py] Warning: could not recompute logo for response:", ex)
