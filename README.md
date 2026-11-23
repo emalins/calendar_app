@@ -25,7 +25,7 @@ You don't need to replace your booking system or ask anyone to enter information
 
 ### See the whole day at a glance
 
-Choose exactly how many calendars to show, from one meeting room to a whole building.  Each room or resource gets its own row, so it's easy to compare schedules.  Events sit on a timeline rather than in a long list.  Even when bookings overlap, both remain visible and event names adjust to the space available.
+Choose exactly how many calendars to show, from one meeting room to a whole building.  Each room or resource gets its own row, so it's easy to compare schedules.  Events sit on a timeline rather than in a long list.  Even when bookings overlap, both remain visible, and event names shrink where needed so that words are not split across lines (see [`SHRINK_TO_FIT`](#keeping-long-titles-readable-shrink_to_fit)).
 
 ### Show people where to go
 
@@ -182,7 +182,42 @@ True/false settings accept `true`, `yes`, `on` or `1` (any capitalisation) for "
 | `EVENT_FONT_SIZE` | No | `12` | Size in pixels. |
 | `EVENT_FONT_FAMILY` | No | `Arial, sans-serif` | Any CSS font-family value. |
 | `EVENT_FONT_COLOR` | No | `#000000` | Text colour. |
+| `SHRINK_TO_FIT` | No | `individual` | Reduces the size of event text so that words are not split across lines in narrow boxes, such as short bookings.  `individual` shrinks each event only as much as it needs, so most events keep the normal size.  `row` makes all the events in a room's row share the smallest size any of them needs.  `everything` makes every event on the display share the smallest size any of them needs.  `off` always uses `EVENT_FONT_SIZE`.  For `row` and `everything`, a title that cannot fit even at the minimum size is left out of that calculation, so one very short booking does not shrink everything else. |
+| `EVENT_MIN_FONT_SIZE` | No | `11` | The smallest size, in pixels, that `SHRINK_TO_FIT` may reduce text to.  It is never larger than `EVENT_FONT_SIZE`.  A title that still does not fit at this size is shown at this size, with long words split or the end cut with an ellipsis. |
 | `CALENDAR_COLORS` | No | *(green)* | Comma-separated colours, one per calendar in the order they appear in `calendars.txt`, e.g.  `#2ecc71,#3498db,#f39c12`.  Accepts `#rgb`, `#rrggbb` or `rrggbb`.  Calendars beyond the end of the list use green.  Back-to-back events in a row alternate between two slightly different shades so they are easy to tell apart. |
+
+### Keeping long titles readable: `SHRINK_TO_FIT`
+
+Short bookings make narrow boxes, and a long word in a narrow box can end up split across two lines, like "Intervie" and "w Panel".  `SHRINK_TO_FIT` avoids this by reducing the text size where it is needed, so words stay whole.  It never shrinks text below `EVENT_MIN_FONT_SIZE`.
+
+| Value | What it does |
+|---|---|
+| `individual` | **The default.**  Each event is shrunk only as much as it needs.  Events that already fit keep the normal `EVENT_FONT_SIZE`. |
+| `row` | All the events in one room's row share the smallest size any of them needs, so each row looks consistent. |
+| `everything` | Every event on the display shares the smallest size any of them needs, so the whole display looks consistent. |
+| `off` | No shrinking.  Text always uses `EVENT_FONT_SIZE`, and long words are split if they do not fit. |
+
+The screenshots below use made-up bookings for a Monday at 11:00, with `EVENT_FONT_SIZE=18` and `EVENT_MIN_FONT_SIZE=11`.
+
+#### `SHRINK_TO_FIT=individual`
+
+![Dashboard with SHRINK_TO_FIT set to individual: only the narrow event boxes use smaller text](docs/shrink-to-fit-individual.png)
+
+Only the two narrowest boxes in Meeting Room 1 are smaller: "Project Steering Group" drops to 17 pixels and "Interview Panel" to 16 pixels.  Every other event keeps its full 18 pixel text.
+
+#### `SHRINK_TO_FIT=everything`
+
+![Dashboard with SHRINK_TO_FIT set to everything: all event text is the same smaller size](docs/shrink-to-fit-everything.png)
+
+Here the most cramped title sets the size for the whole display, so every event uses 16 pixels.  The text is perfectly uniform, but it is smaller overall than it needs to be for most events.  `row` sits between the two: each room's row shares one size, so in this example only the Meeting Room 1 row drops to 16 pixels and the other rows stay at 18.
+
+#### Choosing a mode
+
+- **Use `individual`** for the most readable wallboard.  Most events stay large and only the cramped ones shrink.
+- **Use `row`** if you prefer each room to look consistent.
+- **Use `everything`** only if a perfectly uniform look matters more than size, for instance on a screen viewed from close up.
+- **Raise `EVENT_MIN_FONT_SIZE`** if shrunken text becomes too small to read from where people stand.  A title that cannot fit at the minimum is shown at that size, with long words split or the end cut with an ellipsis, rather than shrinking further.
+- For `row` and `everything`, a title that cannot fit even at the minimum size is left out of the calculation, so one impossible booking does not shrink everything else.
 
 ### "Now" line and past overlay
 
@@ -203,6 +238,13 @@ You can replace the background logo with your own organisation's branding.  Use 
 | `ROTATE_IMAGES` | No | `false` | If `LOGO_PATH` is a folder, cycle through its images (with a cross-fade).  When off, the first image in the folder (alphabetically) is used. |
 | `ROTATE_LOGO_TIME_MINUTES` | No | `60` | How long each image stays up in sequential mode.  Minimum 1. |
 | `ROTATE_LOGO_ORDER` | No | `sequential` | `sequential` steps through the folder in name order on a timer, so several screens stay in step.  `random` picks a random image each time the display refreshes. |
+| `LOGO_OPACITY` | No | `1` | How strong the background logo or image is, from `0` (invisible) to `1` (full strength).  Use a low value such as `0.15` to turn a bold logo into a faint watermark behind the bookings. |
+
+With `LOGO_OPACITY=1` the logo is shown at full strength:
+
+![Dashboard with LOGO_OPACITY set to 1: the background logo is fully opaque behind the bookings](docs/logo-opaque.png)
+
+With `LOGO_OPACITY=0.15` it becomes a subtle watermark, as in the screenshot at the top of this page.
 
 ### Caturday
 
@@ -213,6 +255,15 @@ Swap the background for a folder of pet pictures on a day of your choice.
 | `CATURDAY` | No | `false` | Turn the feature on. |
 | `CATURDAY_DAY` | No | `Friday` | Day of the week it applies, written as a day name (`Monday`...`Sunday`). |
 | `CATURDAY_PATH` | No | `/static/caturday` | Folder (or single image) to use on that day.  The rotation settings above apply to it too. |
+| `CATURDAY_OPACITY` | No | `1` | Strength of the Caturday pictures, from `0` to `1`.  This is separate from `LOGO_OPACITY`, so a faint logo does not fade the pet photos. |
+
+At `CATURDAY_OPACITY=1` the photo is shown at full strength:
+
+![Caturday mode at full opacity: a cat photo fills the background behind the bookings](docs/caturday.png)
+
+At `CATURDAY_OPACITY=0.5` the photo is softened so the bookings stay easy to read:
+
+![Caturday mode at 50 per cent opacity: a softened cat photo behind the bookings](docs/caturday-faded.png)
 
 ### Diagnostics
 
@@ -232,6 +283,8 @@ HEADER_FONT_SIZE=24
 
 EVENT_FONT_SIZE=18
 EVENT_SHOW_TIMES=false
+SHRINK_TO_FIT=individual
+EVENT_MIN_FONT_SIZE=11
 CALENDAR_COLORS=#2ecc71,#3498db,#f39c12
 
 REFRESH_INTERVAL_MINUTES=5
